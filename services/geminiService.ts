@@ -1,0 +1,560 @@
+
+import { GoogleGenAI, Modality, Type, GenerateContentResponse } from "@google/genai";
+import type { StyleCategory, ImageState, StyleSubItem, AspectRatio } from '../types';
+
+// Helper to create a fresh AI client for every request.
+// This ensures we always use the latest API_KEY from process.env,
+// which is critical when the user selects a key dynamically via window.aistudio.openSelectKey().
+const getAiClient = () => {
+    // Priority 1: Platform-provided API key (from window.aistudio.openSelectKey())
+    let API_KEY = process.env.API_KEY;
+    
+    // Priority 2: Manually entered API key (from localStorage)
+    if (!API_KEY) {
+        API_KEY = localStorage.getItem('user_api_key') || undefined;
+    }
+
+    if (!API_KEY) {
+      throw new Error("API_KEY not found. Please select an API key using the platform dialog or enter it in settings.");
+    }
+    return new GoogleGenAI({ apiKey: API_KEY });
+};
+
+async function hashString(str: string): Promise<string> {
+  const msgBuffer = new TextEncoder().encode(str);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function getFromCache(key: string): any | null {
+  const cached = localStorage.getItem(key);
+  return cached ? JSON.parse(cached) : null;
+}
+
+function saveToCache(key: string, value: any): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.warn("localStorage quota exceeded, could not cache result", e);
+  }
+}
+
+// Retry logic for transient API errors (429 Quota, 503 Overloaded, 500 Internal)
+async function generateWithRetry<T>(operation: () => Promise<T>, retries = 5, delay = 3000): Promise<T> {
+    try {
+        return await operation();
+    } catch (error: any) {
+        const code = error.status || error.code;
+        const message = error.message || '';
+        
+        // Handle spending cap exceeded errors
+        if (message.includes('spending cap')) {
+            console.error("Gemini API Spending Cap Exceeded:", message);
+            throw new Error("Gemini API Quota Exceeded: Your project has exceeded its spending cap. Please check your Google Cloud billing settings.");
+        }
+
+        // Handle "Forbidden" errors which often indicate a key selection issue in the shared environment
+        if (message.includes('Forbidden') || message.includes('Requested entity was not found')) {
+            console.error("Gemini API Forbidden error. This usually means the API key is missing, invalid, or lacks permissions for the selected model.");
+            throw new Error("API access forbidden. Please ensure you have selected a valid API key from a paid Google Cloud project.");
+        }
+
+        const isTransient = code === 429 || code === 503 || code === 500 || message.includes('overloaded') || message.includes('Internal Server Error') || message.includes('UNAVAILABLE') || message.includes('RESOURCE_EXHAUSTED');
+        
+        if (isTransient && retries > 0) {
+            console.warn(`Gemini API transient error (${code}): ${message}. Retrying in ${delay}ms... (Retries left: ${retries})`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return generateWithRetry(operation, retries - 1, delay * 2);
+        }
+        
+        console.error(`Gemini API fatal error (${code}): ${message}`);
+        throw error;
+    }
+}
+
+
+const imageAnalysisModel = 'gemini-3-flash-preview';
+const imageEditModel = 'gemini-3.1-flash-image-preview';
+
+const fileToGenerativePart = (base64: string, mimeType: string) => {
+    return {
+        inlineData: {
+            data: base64,
+            mimeType,
+        },
+    };
+};
+
+/**
+ * Processes an uploaded image file.
+ * Resizes and compresses the image to ensure the payload stays within 
+ * reasonable limits for the API and proxy (preventing 502 errors).
+ * @param file The image file to process (e.g., JPG, PNG, WebP).
+ * @returns A promise that resolves to an ImageState object.
+ */
+export async function processAndResizeImage(file: File): Promise<ImageState> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                if (!e.target?.result) {
+                    return reject(new Error("Failed to read file."));
+                }
+                const dataUrl = e.target.result as string;
+                
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const MAX_WIDTH = 1536;
+                    const MAX_HEIGHT = 1536;
+                    let width = img.width;
+                    let height = img.height;
+
+                    if (width > height) {
+                        if (width > MAX_WIDTH) {
+                            height *= MAX_WIDTH / width;
+                            width = MAX_WIDTH;
+                        }
+                    } else {
+                        if (height > MAX_HEIGHT) {
+                            width *= MAX_HEIGHT / height;
+                            height = MAX_HEIGHT;
+                        }
+                    }
+
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                        return reject(new Error("Failed to get canvas context."));
+                    }
+                    ctx.drawImage(img, 0, 0, width, height);
+                    
+                    // Compress to JPEG with 0.8 quality to reduce payload size
+                    const resizedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                    const base64 = resizedDataUrl.split(',')[1];
+
+                    resolve({
+                        fileName: file.name,
+                        base64: base64,
+                        mimeType: 'image/jpeg',
+                    });
+                };
+                img.onerror = () => {
+                    reject(new Error(`Could not load the image file preview for ${file.name}. It may be corrupt or an unsupported format.`));
+                }
+                
+                img.src = dataUrl;
+
+            } catch (error) {
+                reject(error);
+            }
+        };
+        reader.onerror = () => reject(new Error("Failed to read file."));
+        reader.readAsDataURL(file);
+    });
+}
+
+export async function detectTransferableElements(base64Image: string): Promise<StyleCategory[]> {
+    const base64Hash = await hashString(base64Image);
+    const cacheKey = `gemini_cache_detectTransferableElements_${base64Hash}`;
+    const cachedResult = getFromCache(cacheKey);
+    if (cachedResult) return cachedResult;
+
+    const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+    const prompt = `Analyze the provided reference image with microscopic detail. Your objective is to deconstruct its visual DNA into a comprehensive, categorized list of every transferable stylistic and content element. You must identify specific, direct elements (e.g., specific patterns, lighting setups, color combinations, textures) that can be directly mapped and transferred. Do not just describe concepts or ideas; extract the concrete visual components that constitute the style. Be exhaustive.
+
+For each element you identify, provide:
+1.  A concise 'label'.
+2.  A simple one-sentence 'description'.
+3.  A 'confidence' score ('high', 'medium', 'low').
+
+Categorize your findings into the specific categories defined below. You MUST use the provided 'id' and 'label' exactly as specified. The labels have been shortened for UI optimization.
+
+- **Category ID: "color_palette", Label: "Colors"**: The overall color scheme, harmony, temperature, and grading.
+- **Category ID: "lighting", Label: "Lighting"**: The lighting style, quality, direction, and shadows.
+- **Category ID: "mood_atmosphere", Label: "Mood"**: The overall emotional tone, atmosphere, or feeling.
+- **Category ID: "spatial_dna", Label: "Spatial DNA"**: The precise spatial layout, positioning of background objects, and depth relationships.
+- **Category ID: "subject_style", Label: "Style"**: The rendering style of the subject (e.g., Photorealistic, Painterly, sketch).
+- **Category ID: "composition", Label: "Framing"**: Compositional techniques, framing, and perspective.
+- **Category ID: "texture_patterns", Label: "Texture"**: Surface textures, grain, or repeating patterns.
+- **Category ID: "medium_emulation", Label: "Medium"**: Art medium emulation (e.g., Oil painting, Polaroid, 3D render).
+- **Category ID: "post_processing", Label: "Effects"**: Global post-processing effects (e.g., Film grain, Vignette, Glow).
+- **Category ID: "camera_lens_effects", Label: "Optics"**: Distinct lens effects (e.g., Bokeh, Flare, Distortion).
+- **Category ID: "hair_style", Label: "Hair"**: Hairstyle, color, and texture (if people are present).
+- **Category ID: "clothing_style", Label: "Clothing"**: Clothing style, fabric, and fit (if people are present).
+- **Category ID: "accessories", Label: "Accessory"**: Accessories like jewelry, hats, glasses.
+- **Category ID: "subject_additions", Label: "Additions"**: Tattoos, makeup, or props held by subject.
+- **Category ID: "foreground_elements", Label: "Foreground"**: Distinct foreground elements, including specific objects, props, or items placed in the foreground.
+- **Category ID: "background_elements", Label: "Background"**: Background setting, environment, location, and atmosphere.
+- **Category ID: "text_styles", Label: "Typography"**: Typography style, font, placement, color, and effects (e.g., shadows, outlines). You MUST also include an item with id "add_custom_text", label "Add Custom Text", description "Add new text not present in the reference.", and confidence "high".
+
+**CRITICAL INSTRUCTION FOR 'checked' PROPERTY:**
+- **CHECKED (true):** Only set 'checked' to TRUE for elements in these categories: \`color_palette\`, \`lighting\`, \`mood_atmosphere\`, \`spatial_dna\`, \`background_elements\`, \`foreground_elements\`, \`post_processing\`, and \`camera_lens_effects\`.
+- **UNCHECKED (false):** Set 'checked' to FALSE for ALL OTHER categories.
+
+Return the result as a JSON object that strictly adheres to the provided schema.`;
+
+    const schema = {
+        type: Type.ARRAY,
+        items: {
+            type: Type.OBJECT,
+            properties: {
+                id: { type: Type.STRING },
+                label: { type: Type.STRING },
+                items: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            id: { type: Type.STRING },
+                            label: { type: Type.STRING },
+                            description: { type: Type.STRING },
+                            confidence: { type: Type.STRING },
+                            checked: { type: Type.BOOLEAN },
+                        },
+                        required: ['id', 'label', 'description', 'confidence', 'checked'],
+                    },
+                },
+            },
+            required: ['id', 'label', 'items'],
+        },
+    };
+
+    const ai = getAiClient();
+    const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
+        model: imageAnalysisModel,
+        contents: { parts: [imagePart, { text: prompt }] },
+        config: {
+            responseMimeType: "application/json",
+            responseSchema: schema,
+        },
+    }));
+
+    const resultText = response.text!.trim();
+    let parsedResult: any[];
+    try {
+        parsedResult = JSON.parse(resultText);
+        if (!Array.isArray(parsedResult)) {
+            throw new Error("AI response is not an array.");
+        }
+    } catch (e) {
+        console.error("Failed to parse AI response:", resultText);
+        throw new Error("Could not understand the AI's analysis. Please try a different reference image.");
+    }
+
+    const result = parsedResult.map((category: any): StyleCategory => ({
+        id: category.id || `category-${Math.random()}`,
+        label: category.label || "Untitled",
+        items: (category.items || []).map((item: any): StyleSubItem => ({
+            id: item.id || `item-${Math.random()}`,
+            label: item.label || "Untitled Item",
+            description: item.description || "",
+            confidence: item.confidence || "low",
+            checked: item.checked ?? false,
+        })),
+        intensity: 50,
+    }));
+    
+    saveToCache(cacheKey, result);
+    return result;
+}
+
+/**
+ * Analyzes a reference image to create a scene blueprint for consistency.
+ */
+export async function analyzeReferenceScene(base64Image: string): Promise<string> {
+  const base64Hash = await hashString(base64Image);
+  const cacheKey = `gemini_cache_analyzeReferenceScene_${base64Hash}`;
+  const cachedResult = getFromCache(cacheKey);
+  if (cachedResult) return cachedResult;
+
+  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const prompt = `Perform a deep forensic analysis of this reference image to extract its "Visual DNA" and "Spatial Blueprint". 
+  Your goal is to provide a technical specification that allows another artist to perfectly replicate the look, feel, and layout.
+  
+  Focus on:
+  - **Atmospheric DNA:** Describe the exact "feel" of the air (haze, clarity, humidity, dust, light rays).
+  - **Lighting DNA:** Map the precise lighting setup. Identify key, fill, and rim lights. Note the exact color temperature (e.g., "5600K cool daylight" or "2700K warm tungsten").
+  - **Reflections & Specularity DNA:** Analyze how light reflects off surfaces. Identify the type of reflections (sharp, blurry, distorted) and the specularity of different materials (e.g., "high-gloss floor", "matte skin", "metallic sheen"). Note any specific environmental reflections (e.g., "sky reflected in water", "light source reflected in eyes").
+  - **Spatial Blueprint:** Describe the position and scale of key background and foreground objects. Note their depth and relationship to each other.
+  - **Material & Texture DNA:** Identify the dominant materials (e.g., "brushed aluminum", "wet asphalt", "soft velvet") and their specific textures.
+  - **Color DNA:** Define the primary, secondary, and accent colors, including their saturation and luminance levels.
+  
+  This blueprint is the "Source of Truth" for the scene. Be forensic, technical, and exhaustive.`;
+
+  const ai = getAiClient();
+  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
+    model: imageAnalysisModel,
+    contents: { parts: [imagePart, { text: prompt }] },
+  }));
+
+  return response.text || "";
+}
+
+/**
+ * Generates a detailed text analysis of a target image's content.
+ */
+export async function analyzeTargetImageDetails(base64Image: string): Promise<string> {
+  const base64Hash = await hashString(base64Image);
+  const cacheKey = `gemini_cache_analyzeTargetImageDetails_${base64Hash}`;
+  const cachedResult = getFromCache(cacheKey);
+  if (cachedResult) return cachedResult;
+
+  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const prompt = `Analyze the target image and provide a factual description of its core content for geometric locking.
+  - **Pose:** Describe subject's pose, head tilt, chin height, shoulder alignment.
+  - **Identity:** Describe facial landmarks (nose, jawline, eyes, teeth, skin tone).
+  - **Expression:** Describe facial expression.
+  - **Details:** Hair, clothing, accessories, setting.
+  Be concise and forensic.`;
+  
+  const ai = getAiClient();
+  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
+    model: imageAnalysisModel,
+    contents: { parts: [imagePart, { text: prompt }] },
+  }));
+
+  saveToCache(cacheKey, response.text || "");
+  return response.text || "";
+}
+
+/**
+ * Analyzes an image of a clothing item and returns a text description.
+ */
+export async function analyzeClothingImage(base64Image: string): Promise<string> {
+  const base64Hash = await hashString(base64Image);
+  const cacheKey = `gemini_cache_analyzeClothingImage_${base64Hash}`;
+  const cachedResult = getFromCache(cacheKey);
+  if (cachedResult) return cachedResult;
+
+  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const prompt = "Describe the clothing item in this image in detail. Focus on the type of clothing (e.g., 'a blue denim jacket'), its material, fit, color, and any patterns or logos. Be concise and descriptive, as if instructing an artist. Example: 'A vintage, slightly oversized, faded blue denim jacket with copper buttons and a small tear on the left sleeve.'";
+
+  const ai = getAiClient();
+  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
+    model: imageAnalysisModel,
+    contents: { parts: [imagePart, { text: prompt }] },
+  }));
+
+  return response.text || "";
+}
+
+/**
+ * Analyzes an image of an accessory item and returns a text description.
+ */
+export async function analyzeAccessoryImage(base64Image: string): Promise<string> {
+  const base64Hash = await hashString(base64Image);
+  const cacheKey = `gemini_cache_analyzeAccessoryImage_${base64Hash}`;
+  const cachedResult = getFromCache(cacheKey);
+  if (cachedResult) return cachedResult;
+
+  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const prompt = "Describe the accessory item in this image in detail. Focus on the type of accessory (e.g., 'a gold necklace', 'a black fedora hat', 'aviator sunglasses'), its material, style, color, and any distinct features. Be concise and descriptive. Example: 'A delicate, thin 18k gold chain necklace with a small circular pendant.'";
+
+  const ai = getAiClient();
+  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
+    model: imageAnalysisModel,
+    contents: { parts: [imagePart, { text: prompt }] },
+  }));
+
+  saveToCache(cacheKey, response.text || "");
+  return response.text || "";
+}
+
+/**
+ * Analyzes an image of a face and returns a detailed text description of its features.
+ */
+export async function analyzeFaceImage(base64Image: string): Promise<string> {
+  const base64Hash = await hashString(base64Image);
+  const cacheKey = `gemini_cache_analyzeFaceImage_${base64Hash}`;
+  const cachedResult = getFromCache(cacheKey);
+  if (cachedResult) return cachedResult;
+
+  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const prompt = "Describe the key facial features of the person in this image in detail. Focus on face shape (e.g., oval, square), eye color and shape (e.g., almond-shaped, blue), nose shape (e.g., button nose, prominent bridge), lip shape (e.g., full, thin), and any distinctive features like freckles, dimples, or specific eyebrow shape. Be concise and descriptive, as if instructing a portrait artist. Example: 'An oval face with high cheekbones, deep-set green eyes, a straight nose, and full lips. She has light freckles across her nose and cheeks.'";
+
+  const ai = getAiClient();
+  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
+    model: imageAnalysisModel,
+    contents: { parts: [imagePart, { text: prompt }] },
+  }));
+
+  saveToCache(cacheKey, response.text || "");
+  return response.text || "";
+}
+
+/**
+ * Analyzes an image of a background/scene and returns a detailed text description.
+ */
+export async function analyzeBackgroundImage(base64Image: string): Promise<string> {
+  const base64Hash = await hashString(base64Image);
+  const cacheKey = `gemini_cache_analyzeBackgroundImage_${base64Hash}`;
+  const cachedResult = getFromCache(cacheKey);
+  if (cachedResult) return cachedResult;
+
+  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const prompt = `Perform a professional, VFX-level forensic lighting and scene analysis on the provided background image. The goal is to create a comprehensive "lighting and integration blueprint" for a photorealistic composite. Your analysis MUST be structured as a bulleted list, covering these specific points with extreme technical detail:
+- **Environment:** A one-sentence description of the scene (e.g., 'A sun-drenched, sandy beach at golden hour.').
+- **Primary Light Source (Key Light):** Describe the main light. Include its direction (e.g., 'from high top-right'), quality (e.g., 'Hard, direct sunlight with sharp specularity' or 'Soft, heavily diffused light from a large overcast sky'), and color temperature (e.g., 'Warm, golden light, approx 3500K').
+- **Secondary & Ambient Light (Fill/Global Illumination):** Describe the indirect environmental light. Include its dominant color (e.g., 'Bright, cool blue skylight') and intensity relative to the key light (e.g., 'Low-intensity fill'). Note any secondary light sources.
+- **Shadow Properties:** Describe the shadows cast. Include their sharpness/penumbra (e.g., 'Hard-edged, high-contrast shadows with minimal softness' or 'Very soft, diffuse contact shadows'), and color (e.g., 'Deep blue, saturated shadows due to skylight fill'). Mention contact occlusion.
+- **Environmental Color Bleed:** Describe how environmental colors reflect onto objects. Be specific (e.g., 'The green grass casts a subtle, low-saturation green bounce light onto the lower-facing surfaces of objects.').
+- **Atmospherics & Depth:** Describe any haze, fog, or atmospheric perspective that affects distant objects. Note the image's overall sharpness and depth of field. (e.g., 'Slight atmospheric haze causing distant objects to appear lower in contrast and bluer. Shallow depth of field with a soft background bokeh.').
+- **Lighting Essence:** Conclude with a single sentence that captures the overall artistic and emotional mood the lighting creates. This is the guiding principle for the final composite. (e.g., 'The lighting essence is a hazy, late-afternoon dream.' or 'The lighting essence is harsh and cold, creating a sense of urban isolation.').
+
+Your output must be this structured list. Be as precise as a professional 3D lighting artist.`;
+
+  const ai = getAiClient();
+  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
+    model: imageAnalysisModel,
+    contents: { parts: [imagePart, { text: prompt }] },
+  }));
+
+  saveToCache(cacheKey, response.text || "");
+  return response.text || "";
+}
+
+/**
+ * Analyzes an image of a sky and returns a detailed text description.
+ */
+export async function analyzeSkyImage(base64Image: string): Promise<string> {
+  const base64Hash = await hashString(base64Image);
+  const cacheKey = `gemini_cache_analyzeSkyImage_${base64Hash}`;
+  const cachedResult = getFromCache(cacheKey);
+  if (cachedResult) return cachedResult;
+
+  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const prompt = `Analyze this sky image for the purpose of a photorealistic sky replacement. Describe the following in detail:
+  - **Cloud Structure:** Type, density, altitude (e.g., wispy cirrus, dramatic cumulonimbus, clear blue).
+  - **Lighting & Color:** Sun position (implied), color temperature (e.g., golden hour warm, noon cool), gradient shifts from horizon to zenith.
+  - **Atmospherics:** Haze, fog, clarity.
+  - **Overall Mood:** (e.g., stormy, serene, vibrant sunset).
+  
+  Provide a concise, descriptive paragraph that acts as a blueprint for generating/compositing this exact sky.`;
+
+  const ai = getAiClient();
+  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
+    model: imageAnalysisModel,
+    contents: { parts: [imagePart, { text: prompt }] },
+  }));
+
+  saveToCache(cacheKey, response.text || "");
+  return response.text || "";
+}
+
+/**
+ * Analyzes a set of images to extract a consistent "Visual DNA" for a digital twin.
+ */
+export async function analyzeTwinImages(images: ImageState[]): Promise<string> {
+  const imageHashes = await Promise.all(images.map(img => hashString(img.base64!)));
+  const cacheKey = `gemini_cache_analyzeTwinImages_${imageHashes.join('')}`;
+  const cachedResult = getFromCache(cacheKey);
+  if (cachedResult) return cachedResult;
+
+  const imageParts = images.map(img => fileToGenerativePart(img.base64!, img.mimeType!));
+  const prompt = `Analyze this set of images of the same subject. Your goal is to extract a consistent "Visual DNA" that defines this subject's unique appearance across different environments and poses.
+  
+  Focus on identifying:
+  - **Facial Structure:** Bone structure, face shape, jawline, forehead.
+  - **Key Features:** Eyes (color, shape, distance), nose (bridge, tip), lips (fullness, shape), ears.
+  - **Distinctive Marks:** Freckles, moles, scars, dimples, tattoos.
+  - **Hair DNA:** Natural color, texture, typical style, hairline.
+  - **Build & Proportions:** Overall body type, height (estimated), neck length, shoulder width.
+  
+  Provide a highly detailed, technical description that acts as a "Master Blueprint" for this subject. This description will be used to maintain perfect consistency when generating new images of this person.`;
+
+  const ai = getAiClient();
+  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
+    model: imageAnalysisModel,
+    contents: { parts: [...imageParts, { text: prompt }] },
+  }));
+
+  saveToCache(cacheKey, response.text || "");
+  return response.text || "";
+}
+
+
+/**
+ * Edits an image based on a detailed text prompt using the image-in, image-out model.
+ */
+export async function evaluateRealism(generatedBase64: string, generatedMimeType: string, targetBase64: string, targetMimeType: string): Promise<'realistic' | 'slightly off'> {
+  try {
+    const ai = getAiClient();
+    const model = 'gemini-3-flash-preview';
+
+    const prompt = `
+You are an expert photography and compositing judge.
+I am providing you with two images:
+1. The original target image (Image 1)
+2. The generated composite image (Image 2)
+
+Your task is to evaluate the REALISM of the generated image (Image 2).
+Focus on:
+- Lighting match (do the shadows and highlights make sense in the new environment?)
+- Grounding (does the subject look like they are floating, or are they planted firmly?)
+- Edge blending (are there harsh cut-out lines or halos?)
+- Scale and perspective (does the subject's size make sense?)
+
+Respond with ONLY ONE of the following two phrases:
+"realistic" - if the image looks like a genuine, unedited photograph with good compositing.
+"slightly off" - if there are noticeable compositing errors, floating subjects, mismatched lighting, or AI artifacts.
+`;
+
+    const response = await ai.models.generateContent({
+      model,
+      contents: {
+        parts: [
+          { inlineData: { data: targetBase64, mimeType: targetMimeType } },
+          { inlineData: { data: generatedBase64, mimeType: generatedMimeType } },
+          { text: prompt }
+        ]
+      },
+      config: {
+        temperature: 0.1,
+      }
+    });
+
+    const text = response.text?.toLowerCase().trim() || '';
+    if (text.includes('slightly off')) {
+      return 'slightly off';
+    }
+    return 'realistic';
+  } catch (error) {
+    console.error("Error evaluating realism:", error);
+    return 'realistic'; // Default to realistic on error to avoid breaking the UI
+  }
+}
+
+export async function editImage(
+    imageParts: { inlineData: { data: string, mimeType: string }}[], 
+    prompt: string,
+    aspectRatio?: AspectRatio,
+    seed?: number
+): Promise<string> {
+  const textPart = { text: prompt };
+  
+  const ai = getAiClient();
+  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
+    model: imageEditModel,
+    contents: { parts: [...imageParts, textPart] },
+    config: {
+        responseModalities: [Modality.IMAGE, Modality.TEXT],
+        imageConfig: {
+            imageSize: '4K',
+            ...(aspectRatio ? { aspectRatio } : {})
+        },
+        ...(seed !== undefined ? { seed } : {})
+    },
+  }));
+
+  const editedImagePart = response.candidates?.[0]?.content?.parts?.find(part => part.inlineData);
+  if (editedImagePart?.inlineData) {
+    return editedImagePart.inlineData.data;
+  }
+  
+  const textResponse = response.text?.trim();
+  console.error("Image generation failed. Model response:", textResponse);
+  throw new Error(`AI failed to return an edited image. Reason: ${textResponse || "No reason provided."}`);
+}
