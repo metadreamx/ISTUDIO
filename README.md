@@ -10,9 +10,10 @@ For normal users, use the GitHub **Releases** page. Do not use GitHub's green **
 
 1. Open the latest Release for this repo.
 2. Download `LAUNCH ISTUDIO.bat`.
-3. Double-click `LAUNCH ISTUDIO.bat`.
-4. The launcher downloads the complete ISTUDIO package automatically, installs it, and starts ISTUDIO.
-5. ISTUDIO installs to `%LOCALAPPDATA%\ISTUDIO` and creates a desktop shortcut.
+3. Move `LAUNCH ISTUDIO.bat` to the folder where you want ISTUDIO installed.
+4. Double-click `LAUNCH ISTUDIO.bat`.
+5. The launcher creates an `ISTUDIO` folder beside the BAT, installs the complete app there, and starts ISTUDIO.
+6. The installer also creates a desktop shortcut.
 
 Users do not need to install anything else. The release package includes everything ISTUDIO needs to run.
 
@@ -38,10 +39,10 @@ The menu includes:
 
 ## Project Storage
 
-Installed projects are saved locally here:
+Installed projects are saved inside the ISTUDIO folder beside the launcher:
 
 ```text
-%LOCALAPPDATA%\ISTUDIO\projects
+<folder with LAUNCH ISTUDIO.bat>\ISTUDIO\projects
 ```
 
 Project data stays on the user's computer. Updates preserve projects and `.env.local`.

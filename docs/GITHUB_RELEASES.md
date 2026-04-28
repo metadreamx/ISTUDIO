@@ -9,7 +9,7 @@ Each GitHub Release should expose only:
 - `LAUNCH ISTUDIO.bat`
 - `ISTUDIO-windows.zip`
 
-Tell users to download `LAUNCH ISTUDIO.bat`. That single launcher installs or repairs ISTUDIO, then starts the app in one run. Users can open the maintenance menu with `LAUNCH ISTUDIO.bat menu`.
+Tell users to download `LAUNCH ISTUDIO.bat`, move it to the folder where they want ISTUDIO installed, then double-click it. The launcher creates an `ISTUDIO` folder beside the BAT, installs or repairs the app there, then starts ISTUDIO in one run. Users can open the maintenance menu with `LAUNCH ISTUDIO.bat menu`.
 
 Users should not use GitHub's **Code > Download ZIP** button. The only supported install path is `LAUNCH ISTUDIO.bat` from GitHub Releases.
 
@@ -29,17 +29,17 @@ The launcher validates these files before starting ISTUDIO.
 
 ## Install And Update Flow
 
-The launcher installs ISTUDIO to:
+The launcher installs ISTUDIO beside the BAT:
 
 ```text
-%LOCALAPPDATA%\ISTUDIO
+<folder with LAUNCH ISTUDIO.bat>\ISTUDIO
 ```
 
 It preserves:
 
-- `%LOCALAPPDATA%\ISTUDIO\projects`
-- `%LOCALAPPDATA%\ISTUDIO\.env.local`
-- `%LOCALAPPDATA%\ISTUDIO\.istudio-release`
+- `<install folder>\projects`
+- `<install folder>\.env.local`
+- `<install folder>\.istudio-release`
 
 The installed launcher can also check for updates and replace the app with the newest GitHub Release package.
 
