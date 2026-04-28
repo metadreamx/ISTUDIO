@@ -15,9 +15,9 @@ The workflow is simple: choose a reference image, import your target photos, des
 
 ## Install on Windows
 
-1. Open the latest GitHub Release.
-2. Download `Install-ISTUDIO.bat`.
-3. Double-click the installer.
+1. Open the latest GitHub Release. Do not use GitHub's green **Code > Download ZIP** button for normal installs.
+2. Download one launcher: `ISTUDIO.exe` or `ISTUDIO.bat`.
+3. Double-click it.
 
 The installer downloads the newest self-contained ISTUDIO package, installs it to:
 
@@ -27,9 +27,11 @@ The installer downloads the newest self-contained ISTUDIO package, installs it t
 
 It includes the Node.js runtime, app dependencies, and production build. Users do not need to install Node.js, npm, or developer tools. It also creates a desktop shortcut named `ISTUDIO`.
 
+If a user sees a Node.js error, they most likely launched the source-code folder instead of the release launcher. Have them run `ISTUDIO.exe` or `ISTUDIO.bat` from the latest Release.
+
 ## Launch and Update
 
-Open `ISTUDIO.bat` or the desktop shortcut. The launcher shows:
+Open `ISTUDIO.exe`, `ISTUDIO.bat`, or the desktop shortcut. The launcher shows:
 
 - `Launch ISTUDIO`
 - `Check for updates`
@@ -85,8 +87,8 @@ git push origin v1.0.1
 
 The release contains:
 
-- `Install-ISTUDIO.bat`
-- `Install-ISTUDIO.ps1`
+- `ISTUDIO.exe`
+- `ISTUDIO.bat`
 - `ISTUDIO-windows.zip`
 
 The launcher update check needs at least one published GitHub Release. If it says no release is available, push a version tag and wait for the **Build ISTUDIO Release** action to finish.

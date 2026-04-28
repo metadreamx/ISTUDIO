@@ -16,13 +16,15 @@ git push origin v1.0.0
 
 The workflow creates a GitHub Release with:
 
-- `Install-ISTUDIO.bat`
-- `Install-ISTUDIO.ps1`
+- `ISTUDIO.exe`
+- `ISTUDIO.bat`
 - `ISTUDIO-windows.zip`
 
-Share `Install-ISTUDIO.bat` with users. It downloads the latest release, installs ISTUDIO to `%LOCALAPPDATA%\ISTUDIO`, creates a desktop launcher, and opens the ISTUDIO Launcher menu.
+Share `ISTUDIO.exe` as the easiest launcher, or `ISTUDIO.bat` as the fallback launcher. Either one downloads the latest release, installs ISTUDIO to `%LOCALAPPDATA%\ISTUDIO`, creates a desktop launcher, and opens the ISTUDIO Launcher menu.
 
-The `ISTUDIO-windows.zip` package must contain `runtime/node/node.exe`, `node_modules`, `dist/index.html`, and `ISTUDIO.bat`. The packager and installer both validate these files before shipping or installing.
+The `ISTUDIO-windows.zip` package must contain `runtime/node/node.exe`, `runtime/node/npm.cmd`, `node_modules`, `dist/index.html`, `dist-server/server.js`, `ISTUDIO.exe`, and `ISTUDIO.bat`. The packager and installer both validate these files before shipping or installing.
+
+Normal users should not install from GitHub's source-code zip because source zips do not include ignored runtime folders such as `runtime/`, `node_modules/`, `dist/`, or `dist-server/`.
 
 ## Updates
 
@@ -33,7 +35,7 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-Users can run the same installer again, or choose **Check for updates** inside `ISTUDIO.bat`. The updater downloads the newest GitHub Release and updates the app while preserving:
+Users can run `ISTUDIO.exe` / `ISTUDIO.bat` again, or choose **Check for updates** inside the launcher. The updater downloads the newest GitHub Release and updates the app while preserving:
 
 - `%LOCALAPPDATA%\ISTUDIO\projects`
 - `%LOCALAPPDATA%\ISTUDIO\.env.local`

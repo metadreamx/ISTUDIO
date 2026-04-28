@@ -46,8 +46,8 @@ function Assert-IStudioPackage {
 
   $requiredPaths = @(
     "ISTUDIO.bat",
+    "ISTUDIO.exe",
     "package.json",
-    "server.ts",
     "dist-server\server.js",
     "dist\index.html",
     "scripts\ISTUDIO-Launcher.ps1",
@@ -142,9 +142,11 @@ try {
     $desktop = [Environment]::GetFolderPath("Desktop")
     if ($desktop) {
       $shortcutPath = Join-Path $desktop "ISTUDIO.lnk"
+      $launcherExe = Join-Path $InstallDir "ISTUDIO.exe"
+      $launcherBat = Join-Path $InstallDir "ISTUDIO.bat"
       $shell = New-Object -ComObject WScript.Shell
       $shortcut = $shell.CreateShortcut($shortcutPath)
-      $shortcut.TargetPath = Join-Path $InstallDir "ISTUDIO.bat"
+      $shortcut.TargetPath = if (Test-Path $launcherExe) { $launcherExe } else { $launcherBat }
       $shortcut.WorkingDirectory = $InstallDir
       $shortcut.Description = "Launch ISTUDIO"
       $shortcut.Save()
@@ -158,7 +160,10 @@ try {
 
   if (-not $NoLaunch) {
     Write-Step "Launching ISTUDIO"
-    Start-Process -FilePath (Join-Path $InstallDir "ISTUDIO.bat") -WorkingDirectory $InstallDir
+    $launcherExe = Join-Path $InstallDir "ISTUDIO.exe"
+    $launcherBat = Join-Path $InstallDir "ISTUDIO.bat"
+    $launcherPath = if (Test-Path $launcherExe) { $launcherExe } else { $launcherBat }
+    Start-Process -FilePath $launcherPath -WorkingDirectory $InstallDir
   }
 } finally {
   if (Test-Path $tempRoot) {

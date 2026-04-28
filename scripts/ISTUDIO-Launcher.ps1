@@ -190,8 +190,8 @@ function Assert-IStudioPackage {
 
   $requiredPaths = @(
     "ISTUDIO.bat",
+    "ISTUDIO.exe",
     "package.json",
-    "server.ts",
     "dist-server\server.js",
     "dist\index.html",
     "scripts\ISTUDIO-Launcher.ps1",
@@ -242,8 +242,8 @@ function Assert-IStudioPackage {
 
   $requiredPaths = @(
     "ISTUDIO.bat",
+    "ISTUDIO.exe",
     "package.json",
-    "server.ts",
     "dist-server\server.js",
     "dist\index.html",
     "scripts\ISTUDIO-Launcher.ps1",
@@ -285,7 +285,10 @@ try {
   Write-Host "ISTUDIO has been updated." -ForegroundColor Green
   Write-Host "Launching the updated app..."
   Start-Sleep -Seconds 1
-  Start-Process -FilePath (Join-Path $InstallDir "ISTUDIO.bat") -WorkingDirectory $InstallDir
+  $launcherExe = Join-Path $InstallDir "ISTUDIO.exe"
+  $launcherBat = Join-Path $InstallDir "ISTUDIO.bat"
+  $launcherPath = if (Test-Path $launcherExe) { $launcherExe } else { $launcherBat }
+  Start-Process -FilePath $launcherPath -WorkingDirectory $InstallDir
 } catch {
   Write-Host ""
   Write-Host "ISTUDIO update failed." -ForegroundColor Red
@@ -423,11 +426,11 @@ function Assert-InstalledReleasePackage {
   $requiredPaths = @(
     "runtime\node\node.exe",
     "runtime\node\npm.cmd",
+    "ISTUDIO.exe",
     "node_modules",
     "dist-server\server.js",
     "dist\index.html",
     "scripts\ISTUDIO-Launcher.ps1",
-    "server.ts",
     "package.json"
   )
 
@@ -436,7 +439,7 @@ function Assert-InstalledReleasePackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "This ISTUDIO install is incomplete. Missing: $($missing -join ', '). Run Install-ISTUDIO.bat again to repair the app."
+    throw "This ISTUDIO install is incomplete. Missing: $($missing -join ', '). Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
   }
 }
 
@@ -452,7 +455,7 @@ function Ensure-AppReady {
 
   if (-not $node) {
     if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing the bundled Node.js runtime. Run Install-ISTUDIO.bat again to repair the app."
+      throw "This ISTUDIO install is missing the bundled Node.js runtime. Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
     }
     throw "Node.js was not found. Install Node.js 22 for development, or install ISTUDIO from the release installer."
   }
@@ -460,12 +463,12 @@ function Ensure-AppReady {
   $npm = Get-NpmCommand
 
   if ($isReleaseInstall -and -not $hasPortableNode) {
-    throw "This ISTUDIO install is missing the bundled Node.js runtime. Run Install-ISTUDIO.bat again to repair the app."
+    throw "This ISTUDIO install is missing the bundled Node.js runtime. Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
   }
 
   if (-not (Test-Path (Join-Path $AppDir "node_modules"))) {
     if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing bundled dependencies. Run Install-ISTUDIO.bat again to repair the app."
+      throw "This ISTUDIO install is missing bundled dependencies. Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
     }
     Write-Host ""
     Write-Host "Installing ISTUDIO dependencies..." -ForegroundColor Cyan
@@ -477,7 +480,7 @@ function Ensure-AppReady {
 
   if (-not (Test-Path (Join-Path $AppDir "dist\index.html"))) {
     if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing the production build. Run Install-ISTUDIO.bat again to repair the app."
+      throw "This ISTUDIO install is missing the production build. Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
     }
     Write-Host ""
     Write-Host "Building ISTUDIO for production..." -ForegroundColor Cyan
@@ -489,7 +492,7 @@ function Ensure-AppReady {
 
   if (-not (Test-Path (Join-Path $AppDir "dist-server\server.js"))) {
     if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing the production server build. Run Install-ISTUDIO.bat again to repair the app."
+      throw "This ISTUDIO install is missing the production server build. Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
     }
     Write-Host ""
     Write-Host "Building ISTUDIO server for production..." -ForegroundColor Cyan
