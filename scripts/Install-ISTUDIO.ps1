@@ -62,8 +62,68 @@ function Assert-IStudioPackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
+    throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
   }
+}
+
+function Get-ReleaseZipAsset {
+  param([object]$Release)
+
+  if (-not $Release -or -not $Release.assets) {
+    return $null
+  }
+
+  $asset = $Release.assets | Where-Object { $_.name -eq "ISTUDIO-windows.zip" } | Select-Object -First 1
+  if (-not $asset) {
+    $asset = $Release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+  }
+  return $asset
+}
+
+function Get-ReleaseInstallerAsset {
+  param([object]$Release)
+
+  if (-not $Release -or -not $Release.assets) {
+    return $null
+  }
+
+  return $Release.assets | Where-Object { $_.name -like "*.bat" } | Select-Object -First 1
+}
+
+function Expand-IStudioBatPackage {
+  param(
+    [string]$InstallerPath,
+    [string]$DestinationPath
+  )
+
+  $payloadPath = Join-Path ([System.IO.Path]::GetDirectoryName($InstallerPath)) "ISTUDIO-package.b64"
+  $zipFromBat = Join-Path ([System.IO.Path]::GetDirectoryName($InstallerPath)) "ISTUDIO-windows.zip"
+  $foundPayload = $false
+  $payloadLines = 0
+  $writer = [System.IO.StreamWriter]::new($payloadPath, $false, [System.Text.Encoding]::ASCII)
+  try {
+    foreach ($line in [System.IO.File]::ReadLines($InstallerPath)) {
+      if ($foundPayload) {
+        $clean = $line.Trim()
+        if ($clean.Length -gt 0) {
+          $writer.WriteLine($clean)
+          $payloadLines++
+        }
+      } elseif ($line -eq "__ISTUDIO_PAYLOAD_B64__") {
+        $foundPayload = $true
+      }
+    }
+  } finally {
+    $writer.Dispose()
+  }
+
+  if (-not $foundPayload -or $payloadLines -eq 0) {
+    throw "The ISTUDIO installer package is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+  }
+
+  $payload = Get-Content -LiteralPath $payloadPath -Raw
+  [System.IO.File]::WriteAllBytes($zipFromBat, [Convert]::FromBase64String($payload))
+  Expand-Archive -Path $zipFromBat -DestinationPath $DestinationPath -Force
 }
 
 function Get-LatestRelease {
@@ -78,16 +138,16 @@ function Get-LatestRelease {
     if ($statusCode -eq 404) {
       try {
         Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo" -Headers $headers -TimeoutSec 15 | Out-Null
-        throw "ISTUDIO release is not published yet. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases after the release is available."
+        throw "ISTUDIO release is not published yet. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases after the release is available."
       } catch {
         if ($_.Exception.Message -like "ISTUDIO release is not published yet*") {
           throw
         }
-        throw "ISTUDIO release is not available. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
+        throw "ISTUDIO release is not available. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
       }
     }
 
-    throw "Could not reach ISTUDIO releases. Check your internet connection, then run LAUNCH ISTUDIO.bat again. $($_.Exception.Message)"
+    throw "Could not reach ISTUDIO releases. Check your internet connection, then run LAUNCH-ISTUDIO.bat again. $($_.Exception.Message)"
   }
 }
 
@@ -99,26 +159,37 @@ $InstallDir = Assert-SafeInstallDir -Path $InstallDir
 $headers = @{ "User-Agent" = "ISTUDIO-Installer" }
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("istudio-install-" + [guid]::NewGuid())
 $zipPath = Join-Path $tempRoot "ISTUDIO-windows.zip"
+$installerBatPath = Join-Path $tempRoot "LAUNCH-ISTUDIO.bat"
 $extractPath = Join-Path $tempRoot "extract"
 
 try {
   Write-Step "Finding the latest ISTUDIO release"
   $release = Get-LatestRelease
-  $asset = $release.assets | Where-Object { $_.name -eq "ISTUDIO-windows.zip" } | Select-Object -First 1
+  $asset = Get-ReleaseZipAsset -Release $release
+  $assetMode = "zip"
   if (-not $asset) {
-    $asset = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+    $asset = Get-ReleaseInstallerAsset -Release $release
+    $assetMode = "bat"
   }
   if (-not $asset) {
-    throw "The ISTUDIO release package is missing. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
+    throw "The ISTUDIO release package is missing. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   New-Item -ItemType Directory -Force -Path $tempRoot, $extractPath | Out-Null
 
   Write-Step "Downloading $($asset.name)"
-  Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -Headers $headers
+  if ($assetMode -eq "zip") {
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -Headers $headers
+  } else {
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installerBatPath -Headers $headers
+  }
 
   Write-Step "Preparing the update"
-  Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+  if ($assetMode -eq "zip") {
+    Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+  } else {
+    Expand-IStudioBatPackage -InstallerPath $installerBatPath -DestinationPath $extractPath
+  }
   $packageRoot = Find-PackageRoot -ExtractPath $extractPath
   Assert-IStudioPackage -PackageRoot $packageRoot
 
@@ -163,7 +234,7 @@ try {
     if ($LaunchInline -or $MenuInline) {
       $launcherScript = Join-Path $InstallDir "scripts\ISTUDIO-Launcher.ps1"
       if (-not (Test-Path $launcherScript)) {
-        throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
+        throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
       }
       if ($LaunchInline) {
         & $launcherScript -Repo $Repo -AutoLaunch
@@ -181,3 +252,4 @@ try {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force
   }
 }
+

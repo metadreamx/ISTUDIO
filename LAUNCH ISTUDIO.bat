@@ -1,77 +1,266 @@
 @echo off
 setlocal
 
-title LAUNCH ISTUDIO
-set "LAUNCHER_DIR=%~dp0"
-set "INSTALL_DIR=%LAUNCHER_DIR%ISTUDIO"
-set "ISTUDIO_REPO=metadreamx/ISTUDIO"
-set "LAUNCH_MODE=-AutoLaunch"
-set "INSTALL_MODE=-LaunchInline"
+title ISTUDIO Setup
+set "ISTUDIO_SELF=%~f0"
+set "ISTUDIO_MODE=%~1"
 
-if /I "%~1"=="menu" set "LAUNCH_MODE=" & set "INSTALL_MODE=-MenuInline"
-if /I "%~1"=="/menu" set "LAUNCH_MODE=" & set "INSTALL_MODE=-MenuInline"
-if /I "%~1"=="--menu" set "LAUNCH_MODE=" & set "INSTALL_MODE=-MenuInline"
-
-echo.
-echo ========================================
-echo   LAUNCH ISTUDIO
-echo ========================================
-echo.
-
-if exist "%LAUNCHER_DIR%scripts\ISTUDIO-Launcher.ps1" (
-  if exist "%LAUNCHER_DIR%runtime\node\node.exe" (
-    if exist "%LAUNCHER_DIR%runtime\node\npm.cmd" (
-      if exist "%LAUNCHER_DIR%node_modules" (
-        if exist "%LAUNCHER_DIR%dist\index.html" (
-          if exist "%LAUNCHER_DIR%dist-server\server.js" (
-            set "INSTALL_DIR=%LAUNCHER_DIR%"
-            goto launch_app
-          )
-        )
-      )
-    )
-  )
-)
-
-if exist "%INSTALL_DIR%\scripts\ISTUDIO-Launcher.ps1" (
-  if exist "%INSTALL_DIR%\runtime\node\node.exe" (
-    if exist "%INSTALL_DIR%\runtime\node\npm.cmd" (
-      if exist "%INSTALL_DIR%\node_modules" (
-        if exist "%INSTALL_DIR%\dist\index.html" (
-          if exist "%INSTALL_DIR%\dist-server\server.js" (
-            goto launch_app
-          )
-        )
-      )
-    )
-  )
-)
-
-echo ISTUDIO will be installed in this folder:
-echo   "%INSTALL_DIR%"
-echo.
-echo To install somewhere else, close this window, move LAUNCH ISTUDIO.bat
-echo to the folder where you want ISTUDIO, then run it again.
-echo.
-echo Installing or repairing ISTUDIO automatically...
-echo.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $repo='%ISTUDIO_REPO%'; $installDir='%INSTALL_DIR%'; $tmp=Join-Path $env:TEMP ('Install-ISTUDIO-' + [guid]::NewGuid() + '.ps1'); $url='https://raw.githubusercontent.com/' + $repo + '/main/scripts/Install-ISTUDIO.ps1'; Invoke-WebRequest -Uri $url -OutFile $tmp -Headers @{ 'User-Agent'='ISTUDIO-Launcher' }; & powershell -NoProfile -ExecutionPolicy Bypass -File $tmp -Repo $repo -InstallDir $installDir %INSTALL_MODE%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $self=$env:ISTUDIO_SELF; $mode=$env:ISTUDIO_MODE; $tmp=Join-Path $env:TEMP ('ISTUDIO-Setup-' + [guid]::NewGuid() + '.ps1'); $capture=$false; foreach($line in [System.IO.File]::ReadLines($self)){ if($line -eq '__ISTUDIO_PAYLOAD_B64__'){ break }; if($capture){ [System.IO.File]::AppendAllText($tmp, $line + [Environment]::NewLine, [Text.Encoding]::ASCII) }; if($line -eq '__ISTUDIO_SETUP_PS1__'){ $capture=$true } }; & $tmp -Self $self -Mode $mode; $code=$LASTEXITCODE; Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; exit $code"
 if errorlevel 1 (
   echo.
-  echo ISTUDIO install or repair failed.
-  echo Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again.
+  echo ISTUDIO setup did not complete.
   pause
   exit /b 1
 )
 exit /b 0
 
-:launch_app
-cd /d "%INSTALL_DIR%"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%INSTALL_DIR%\scripts\ISTUDIO-Launcher.ps1" %LAUNCH_MODE%
-if errorlevel 1 (
-  echo.
-  echo ISTUDIO closed with an error.
-  echo Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again.
-  pause
-  exit /b 1
+__ISTUDIO_SETUP_PS1__
+param(
+  [string]$Self,
+  [string]$Mode = ""
 )
+
+$ErrorActionPreference = "Stop"
+
+function Write-SetupHeader {
+  param([string]$Subtitle)
+
+  Clear-Host
+  Write-Host ""
+  Write-Host "========================================" -ForegroundColor DarkGray
+  Write-Host "  ISTUDIO Setup" -ForegroundColor White
+  Write-Host "  Iconic Recordings" -ForegroundColor Gray
+  Write-Host "========================================" -ForegroundColor DarkGray
+  Write-Host ""
+  if (-not [string]::IsNullOrWhiteSpace($Subtitle)) {
+    Write-Host $Subtitle -ForegroundColor Cyan
+    Write-Host ""
+  }
+}
+
+function Write-Step {
+  param(
+    [int]$Number,
+    [int]$Total,
+    [string]$Message
+  )
+
+  Write-Host ("[{0}/{1}] {2}" -f $Number, $Total, $Message) -ForegroundColor Cyan
+}
+
+function Test-IStudioInstall {
+  param([string]$Path)
+
+  $required = @(
+    "LAUNCH ISTUDIO.bat",
+    "package.json",
+    "dist-server\server.js",
+    "dist\index.html",
+    "scripts\ISTUDIO-Launcher.ps1",
+    "node_modules",
+    "runtime\node\node.exe",
+    "runtime\node\npm.cmd"
+  )
+
+  foreach ($item in $required) {
+    if (-not (Test-Path (Join-Path $Path $item))) {
+      return $false
+    }
+  }
+  return $true
+}
+
+function Get-InstallDirectory {
+  param([string]$InstallerPath)
+
+  $launcherDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($InstallerPath))
+  if (Test-IStudioInstall -Path $launcherDir) {
+    return $launcherDir
+  }
+  return Join-Path $launcherDir "ISTUDIO"
+}
+
+function Find-PackageRoot {
+  param([string]$ExtractPath)
+
+  $expected = Join-Path $ExtractPath "ISTUDIO"
+  if (Test-Path $expected) {
+    return $expected
+  }
+
+  $directories = Get-ChildItem -LiteralPath $ExtractPath -Directory
+  if ($directories.Count -eq 1) {
+    return $directories[0].FullName
+  }
+
+  return $ExtractPath
+}
+
+function Assert-IStudioPackage {
+  param([string]$PackageRoot)
+
+  if (-not (Test-IStudioInstall -Path $PackageRoot)) {
+    throw "The ISTUDIO installer package is incomplete. Download a fresh LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+  }
+}
+
+function Export-EmbeddedPackage {
+  param(
+    [string]$InstallerPath,
+    [string]$ZipPath
+  )
+
+  $payloadPath = Join-Path ([System.IO.Path]::GetDirectoryName($ZipPath)) "ISTUDIO-package.b64"
+  $foundPayload = $false
+  $payloadLines = 0
+  $writer = [System.IO.StreamWriter]::new($payloadPath, $false, [System.Text.Encoding]::ASCII)
+  try {
+    foreach ($line in [System.IO.File]::ReadLines($InstallerPath)) {
+      if ($foundPayload) {
+        $clean = $line.Trim()
+        if ($clean.Length -gt 0) {
+          $writer.WriteLine($clean)
+          $payloadLines++
+        }
+      } elseif ($line -eq "__ISTUDIO_PAYLOAD_B64__") {
+        $foundPayload = $true
+      }
+    }
+  } finally {
+    $writer.Dispose()
+  }
+
+  if (-not $foundPayload -or $payloadLines -eq 0) {
+    throw "This setup file does not include the ISTUDIO app package. Download the one-click installer from https://github.com/metadreamx/ISTUDIO/releases/latest/download/LAUNCH-ISTUDIO.bat."
+  }
+
+  $payload = Get-Content -LiteralPath $payloadPath -Raw
+  [System.IO.File]::WriteAllBytes($ZipPath, [Convert]::FromBase64String($payload))
+}
+
+function Install-IStudioPackage {
+  param(
+    [string]$PackageRoot,
+    [string]$InstallDir
+  )
+
+  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir "projects") | Out-Null
+
+  $preserve = @("projects", ".env.local", ".istudio-release")
+  Get-ChildItem -LiteralPath $InstallDir -Force |
+    Where-Object { $preserve -notcontains $_.Name } |
+    Remove-Item -Recurse -Force
+
+  Get-ChildItem -LiteralPath $PackageRoot -Force |
+    ForEach-Object {
+      Copy-Item -LiteralPath $_.FullName -Destination $InstallDir -Recurse -Force
+    }
+}
+
+function New-IStudioShortcut {
+  param([string]$InstallDir)
+
+  try {
+    $desktop = [Environment]::GetFolderPath("Desktop")
+    if ([string]::IsNullOrWhiteSpace($desktop)) {
+      return
+    }
+
+    $shortcutPath = Join-Path $desktop "ISTUDIO.lnk"
+    $launcherBat = Join-Path $InstallDir "LAUNCH ISTUDIO.bat"
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = $launcherBat
+    $shortcut.WorkingDirectory = $InstallDir
+    $shortcut.Description = "Launch ISTUDIO"
+    $shortcut.Save()
+  } catch {
+    Write-Host "Desktop shortcut could not be created. ISTUDIO is still installed." -ForegroundColor Yellow
+  }
+}
+
+function Start-IStudio {
+  param(
+    [string]$InstallDir,
+    [bool]$ShowMenu
+  )
+
+  $launcherScript = Join-Path $InstallDir "scripts\ISTUDIO-Launcher.ps1"
+  if (-not (Test-Path $launcherScript)) {
+    throw "ISTUDIO installed, but the launcher script is missing. Download a fresh installer and run it again."
+  }
+
+  if ($ShowMenu) {
+    & $launcherScript
+  } else {
+    & $launcherScript -AutoLaunch
+  }
+  exit $LASTEXITCODE
+}
+
+$showMenu = $false
+if (-not [string]::IsNullOrWhiteSpace($Mode)) {
+  $normalizedMode = $Mode.ToLowerInvariant()
+  $showMenu = $normalizedMode -eq "menu" -or $normalizedMode -eq "/menu" -or $normalizedMode -eq "--menu"
+}
+
+$installDir = Get-InstallDirectory -InstallerPath $Self
+
+Write-SetupHeader -Subtitle "Reference-based photo editing, installed where you choose."
+Write-Host "Install location" -ForegroundColor Gray
+Write-Host "  $installDir" -ForegroundColor White
+Write-Host ""
+Write-Host "To install somewhere else, close this window, move this BAT file to the folder you want, then run it again." -ForegroundColor DarkGray
+Write-Host ""
+
+if (Test-IStudioInstall -Path $installDir) {
+  Write-Step -Number 1 -Total 1 -Message "ISTUDIO is already installed. Launching..."
+  Start-Sleep -Milliseconds 500
+  Start-IStudio -InstallDir $installDir -ShowMenu:$showMenu
+}
+
+$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("istudio-setup-" + [guid]::NewGuid())
+$zipPath = Join-Path $tempRoot "ISTUDIO-windows.zip"
+$extractPath = Join-Path $tempRoot "extract"
+
+try {
+  New-Item -ItemType Directory -Force -Path $tempRoot, $extractPath | Out-Null
+
+  Write-Step -Number 1 -Total 5 -Message "Preparing the bundled app package"
+  Export-EmbeddedPackage -InstallerPath $Self -ZipPath $zipPath
+
+  Write-Step -Number 2 -Total 5 -Message "Unpacking ISTUDIO"
+  Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+
+  $packageRoot = Find-PackageRoot -ExtractPath $extractPath
+  Assert-IStudioPackage -PackageRoot $packageRoot
+
+  Write-Step -Number 3 -Total 5 -Message "Installing files"
+  Install-IStudioPackage -PackageRoot $packageRoot -InstallDir $installDir
+
+  Write-Step -Number 4 -Total 5 -Message "Creating desktop shortcut"
+  New-IStudioShortcut -InstallDir $installDir
+
+  Write-Step -Number 5 -Total 5 -Message "Launching ISTUDIO"
+  Write-Host ""
+  Write-Host "ISTUDIO is ready." -ForegroundColor Green
+  Write-Host ""
+  Start-Sleep -Milliseconds 700
+  Start-IStudio -InstallDir $installDir -ShowMenu:$showMenu
+} catch {
+  Write-Host ""
+  Write-Host "ISTUDIO setup could not finish." -ForegroundColor Red
+  Write-Host $_.Exception.Message
+  Write-Host ""
+  Write-Host "Download the latest installer from:" -ForegroundColor Gray
+  Write-Host "https://github.com/metadreamx/ISTUDIO/releases/latest/download/LAUNCH-ISTUDIO.bat" -ForegroundColor White
+  Write-Host ""
+  exit 1
+} finally {
+  if (Test-Path $tempRoot) {
+    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
+__ISTUDIO_PAYLOAD_B64__

@@ -26,15 +26,14 @@ jobs:
 
       - name: Build release package
         shell: pwsh
-        run: .\scripts\package-release.ps1 -Repo "${{ github.repository }}"
+        run: .\scripts\package-release.ps1 -Repo "${{ github.repository }}" -ReleaseTag "${{ github.ref_name }}"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ISTUDIO-windows-release
           path: |
-            release/ISTUDIO-windows.zip
-            release/LAUNCH ISTUDIO.bat
+            release/LAUNCH-ISTUDIO.bat
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/')
@@ -45,7 +44,16 @@ jobs:
           $tag = "${{ github.ref_name }}"
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag release/ISTUDIO-windows.zip "release/LAUNCH ISTUDIO.bat" --clobber
+            gh release upload $tag release/LAUNCH-ISTUDIO.bat --clobber
           } else {
-            gh release create $tag release/ISTUDIO-windows.zip "release/LAUNCH ISTUDIO.bat" --title "ISTUDIO $tag" --notes "Windows launcher and self-contained update package for ISTUDIO."
+            gh release create $tag release/LAUNCH-ISTUDIO.bat --title "ISTUDIO $tag" --notes "Download LAUNCH-ISTUDIO.bat, place it where you want ISTUDIO installed, then double-click it."
+          }
+
+          $releases = gh api "repos/${{ github.repository }}/releases?per_page=100" | ConvertFrom-Json
+          foreach ($release in $releases) {
+            foreach ($asset in $release.assets) {
+              if ($asset.name -notlike "*.bat") {
+                gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$($asset.id)" *> $null
+              }
+            }
           }

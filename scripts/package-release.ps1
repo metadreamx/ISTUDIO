@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Repo = "metadreamx/ISTUDIO",
+  [string]$ReleaseTag = "",
   [string]$NodeVersion = "22.15.0",
   [switch]$SkipChecks,
   [switch]$SkipPortableNode
@@ -45,7 +46,8 @@ function Write-ReleaseInstaller {
   param(
     [string]$Source,
     [string]$Destination,
-    [string]$Repo
+    [string]$Repo,
+    [string]$PackageZip
   )
 
   $content = Get-Content -LiteralPath $Source -Raw
@@ -54,6 +56,21 @@ function Write-ReleaseInstaller {
     $content = $content.Replace("metadreamx/ISTUDIO", $Repo)
   }
   Set-Content -LiteralPath $Destination -Value $content -Encoding ascii
+
+  if (-not (Test-Path $PackageZip)) {
+    throw "Cannot embed missing package zip: $PackageZip"
+  }
+
+  $writer = [System.IO.StreamWriter]::new($Destination, $true, [System.Text.Encoding]::ASCII)
+  try {
+    $base64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($PackageZip))
+    for ($i = 0; $i -lt $base64.Length; $i += 76) {
+      $length = [Math]::Min(76, $base64.Length - $i)
+      $writer.WriteLine($base64.Substring($i, $length))
+    }
+  } finally {
+    $writer.Dispose()
+  }
 }
 
 function Write-ReleasePackageJson {
@@ -110,7 +127,7 @@ $releaseDir = Join-Path $root "release"
 $stageRoot = Join-Path $releaseDir "stage"
 $appStage = Join-Path $stageRoot "ISTUDIO"
 $zipPath = Join-Path $releaseDir "ISTUDIO-windows.zip"
-$batPath = Join-Path $releaseDir "LAUNCH ISTUDIO.bat"
+$batPath = Join-Path $releaseDir "LAUNCH-ISTUDIO.bat"
 
 Push-Location $root
 try {
@@ -149,6 +166,11 @@ try {
     Copy-RequiredItem -Name $item -Root $root -Destination $appStage
   }
   Write-ReleasePackageJson -Root $root -Destination $appStage
+  if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
+    $releasePackage = Get-Content -LiteralPath (Join-Path $appStage "package.json") -Raw | ConvertFrom-Json
+    $ReleaseTag = "v$($releasePackage.version)"
+  }
+  Set-Content -LiteralPath (Join-Path $appStage ".istudio-release") -Value $ReleaseTag -Encoding ascii
 
   New-Item -ItemType Directory -Force -Path (Join-Path $appStage "projects") | Out-Null
 
@@ -203,15 +225,15 @@ try {
     throw "Release zip was not created correctly."
   }
 
-  Write-ReleaseInstaller -Source (Join-Path $root "LAUNCH ISTUDIO.bat") -Destination $batPath -Repo $Repo
+  Write-ReleaseInstaller -Source (Join-Path $root "LAUNCH ISTUDIO.bat") -Destination $batPath -Repo $Repo -PackageZip $zipPath
   Remove-Item -LiteralPath (Join-Path $releaseDir "Install-ISTUDIO.bat") -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $releaseDir "Install-ISTUDIO.ps1") -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $releaseDir "ISTUDIO.bat") -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $releaseDir "ISTUDIO.exe") -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $releaseDir "LAUNCH ISTUDIO.bat") -Force -ErrorAction SilentlyContinue
 
   Write-Host ""
   Write-Host "Release package created:" -ForegroundColor Green
-  Write-Host "  $zipPath"
   Write-Host ("  " + $batPath)
 } finally {
   Pop-Location
