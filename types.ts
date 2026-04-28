@@ -33,12 +33,30 @@ export interface ReferenceTemplate {
   url: string;
 }
 
+export type ExportFormat = 'png' | 'jpeg';
+export type AspectRatio = '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
+
+export interface GenerationSettingsSnapshot {
+  aspectRatio?: AspectRatio | null;
+  anchorImageId?: string | null;
+  selectedCategories: {
+    id: string;
+    label: string;
+    intensity: number;
+    items: string[];
+  }[];
+  customAssets: string[];
+}
+
 export interface HistoryItem {
   id: number;
   projectId: string; // Reference to the project
   generated: string;
   target: ImageState;
   reference: ImageState;
+  targetId?: string;
+  targetFileName?: string | null;
+  settings?: GenerationSettingsSnapshot;
 }
 
 export interface BatchImage {
@@ -48,9 +66,6 @@ export interface BatchImage {
     status: 'pending' | 'queued' | 'processing' | 'done' | 'error';
     dominantColor: string | null;
 }
-
-export type ExportFormat = 'png' | 'jpeg';
-export type AspectRatio = '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
 
 // --- Style Transfer ---
 

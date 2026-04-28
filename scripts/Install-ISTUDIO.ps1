@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Repo = "metadreamx/ISTUDIO",
-  [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "ISTUDIO"),
+  [string]$InstallDir = (Join-Path (Get-Location) "ISTUDIO"),
   [switch]$NoLaunch,
   [switch]$LaunchInline,
   [switch]$MenuInline

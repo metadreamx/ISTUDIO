@@ -1,8 +1,8 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence, MotionConfig } from 'motion/react';
-import type { HistoryItem, AppView, ImageState, ImageTransferState, Project, ReferenceTemplate } from './types';
-import { getHistory, addHistoryItem, deleteHistoryItems, getProjects, saveProject, deleteProject as dbDeleteProject, getProjectStorageInfo, openProjectsFolder, type ProjectStorageInfo } from './services/db';
+import type { AppView, ImageState, ImageTransferState, Project, ReferenceTemplate } from './types';
+import { getProjects, saveProject, deleteProject as dbDeleteProject, getProjectStorageInfo, openProjectsFolder, type ProjectStorageInfo } from './services/db';
 import { Logo, SpinnerIcon } from '@/components/icons';
 import { Tooltip } from '@/components/Tooltip';
 import { StyleTransferView } from '@/components/StyleTransferView';
@@ -109,6 +109,18 @@ const loadReferenceTemplateImage = async (template: ReferenceTemplate): Promise<
   };
 };
 
+const getProjectGenerationCount = (projectList: Project[]): number => {
+  return projectList.reduce((count, project) => {
+    const projectHistory = Array.isArray(project.state?.generationHistory)
+      ? project.state.generationHistory.length
+      : 0;
+    const generatedImages = Array.isArray(project.generatedImages)
+      ? project.generatedImages.length
+      : 0;
+    return count + Math.max(projectHistory, generatedImages);
+  }, 0);
+};
+
 const InfoPanel: React.FC<{
   isOpen: boolean;
   onClose: () => void;
@@ -138,7 +150,7 @@ const InfoPanel: React.FC<{
           <div>
             <h2 className="text-lg font-semibold text-[var(--color-text)]">ISTUDIO System</h2>
             <p className="mt-2 text-sm leading-6 text-[var(--color-text-muted)]">
-              Local project storage, AI connection, and reference-edit export history.
+              Local project storage, AI connection, and project-backed generation history.
             </p>
           </div>
           <button
@@ -155,7 +167,7 @@ const InfoPanel: React.FC<{
           {[
             ['AI connection', hasApiKey ? 'Ready' : 'Required'],
             ['DNA edits', String(projectCount)],
-            ['Exports saved', String(historyCount)],
+            ['Generations saved', String(historyCount)],
           ].map(([label, value]) => (
             <div key={label} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4">
               <p className="text-xs text-[var(--color-text-muted)]">{label}</p>
@@ -182,7 +194,6 @@ const InfoPanel: React.FC<{
 
 const App: React.FC = () => {
   // App State
-  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
   const [activeView, setActiveView] = useState<AppView>('dashboard');
@@ -240,12 +251,10 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [dbHistory, dbProjects, storageInfo] = await Promise.all([
-          withStartupFallback(getHistory(), [] as HistoryItem[], 'History'),
+        const [dbProjects, storageInfo] = await Promise.all([
           withStartupFallback(getProjects(), [] as Project[], 'Projects'),
           withStartupFallback(getProjectStorageInfo(), null as ProjectStorageInfo | null, 'Project storage'),
         ]);
-        setHistory(dbHistory);
         setProjects(dbProjects);
         setProjectStorageInfo(storageInfo);
         if (!storageInfo) {
@@ -261,27 +270,6 @@ const App: React.FC = () => {
     loadData();
   }, []);
 
-  const handleAddToHistory = useCallback(async (item: Omit<HistoryItem, 'id'>) => {
-    try {
-      const newHistoryItem: HistoryItem = { ...item, id: Date.now() };
-      await addHistoryItem(newHistoryItem);
-
-      setHistory(prevHistory => {
-        const updatedHistory = [newHistoryItem, ...prevHistory];
-        const HISTORY_LIMIT = 100;
-        if (updatedHistory.length > HISTORY_LIMIT) {
-          const itemsToDelete = updatedHistory.slice(HISTORY_LIMIT);
-          const idsToDelete = itemsToDelete.map(item => item.id);
-          deleteHistoryItems(idsToDelete).catch(err => console.error("Failed to prune history from DB", err));
-          return updatedHistory.slice(0, HISTORY_LIMIT);
-        }
-        return updatedHistory;
-      });
-    } catch (err) {
-      console.error("Failed to save item to history DB.", err);
-    }
-  }, []);
-  
   const handleNavigate = (view: AppView) => {
     console.log("Navigating to:", view);
     setActiveView(view);
@@ -456,7 +444,6 @@ const App: React.FC = () => {
             <StyleTransferView 
               project={currentProject}
               onUpdateProject={handleUpdateProject}
-              onAddToHistory={handleAddToHistory} 
               referenceTemplate={pendingReferenceTemplate}
               onReferenceTemplateConsumed={() => setPendingReferenceTemplate(null)}
             />
@@ -539,7 +526,7 @@ const App: React.FC = () => {
             isOpen={isInfoPanelOpen}
             onClose={() => setIsInfoPanelOpen(false)}
             projectCount={projects.length}
-            historyCount={history.length}
+            historyCount={getProjectGenerationCount(projects)}
             hasApiKey={hasApiKey}
             storageInfo={projectStorageInfo}
           />

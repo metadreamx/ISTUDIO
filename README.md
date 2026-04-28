@@ -40,7 +40,7 @@ Installed projects are saved inside the ISTUDIO folder beside the launcher:
 <folder with LAUNCH-ISTUDIO.bat>\ISTUDIO\projects
 ```
 
-Project data stays on the user's computer. Updates preserve projects and `.env.local`.
+Each project gets its own folder with the reference image, target photos, generated outputs, saved slider/settings state, and generation history. Project data stays on the user's computer. Updates preserve projects and `.env.local`.
 
 ## Updates
 

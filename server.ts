@@ -75,6 +75,11 @@ function extensionForMime(mimeType: string): string {
 }
 
 function assetBucketForPath(segments: string[]): string {
+  if (segments.includes('generationHistory')) {
+    if (segments.at(-1) === 'generated') return 'outputs';
+    if (segments.at(-1) === 'target') return 'targets';
+    if (segments.at(-1) === 'reference') return 'reference';
+  }
   if (segments.includes('imageEditor')) {
     if (segments.includes('exports')) return 'editor/exports';
     if (segments.includes('mask') || segments.includes('masks')) return 'editor/masks';

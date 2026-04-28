@@ -6,7 +6,7 @@ import { ImageUploader } from './ImageUploader';
 import { MainPanel } from './MainPanel';
 import { StyleChecklist } from './StyleChecklist';
 import { analyzeTargetImageDetails, editImage, detectTransferableElements, analyzeClothingImage, analyzeAccessoryImage, analyzeFaceImage, analyzeBackgroundImage, analyzeSkyImage, analyzeReferenceScene } from '../services/geminiService';
-import { SparklesIcon, XCircleIcon, CheckIcon, LockIcon, AdjustmentsHorizontalIcon } from '@/components/icons';
+import { SparklesIcon, XCircleIcon, CheckIcon, LockIcon, AdjustmentsHorizontalIcon, HistoryIcon, DownloadIcon } from '@/components/icons';
 
 // Utility function to get dominant color from an image
 const getDominantColor = (base64Image: string, mimeType: string): Promise<string> => {
@@ -64,10 +64,11 @@ type GenerationStatus = 'idle' | 'analyzing_target' | 'generating' | 'saving';
 interface StyleTransferViewProps {
     project: Project | null;
     onUpdateProject: (project: Project) => void;
-    onAddToHistory: (item: Omit<HistoryItem, 'id'>) => void;
     referenceTemplate?: ImageState | null;
     onReferenceTemplateConsumed?: () => void;
 }
+
+const createEmptyImage = (): ImageState => ({ fileName: null, base64: null, mimeType: null });
 
 const createInitialItems = (prefix: string, gender: 'man' | 'woman', count: number): any[] => Array.from({ length: count }, (_, i) => ({
     id: `${prefix}-${gender}-${i}`,
@@ -98,9 +99,10 @@ const createInitialSkyItem = (): CustomSkyItem => ({
     status: 'empty'
 });
 
-export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, onUpdateProject, onAddToHistory, referenceTemplate, onReferenceTemplateConsumed }) => {
-  const [referenceImage, setReferenceImage] = useState<ImageState>({ fileName: null, base64: null, mimeType: null });
+export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, onUpdateProject, referenceTemplate, onReferenceTemplateConsumed }) => {
+  const [referenceImage, setReferenceImage] = useState<ImageState>(createEmptyImage());
   const [targetImages, setTargetImages] = useState<BatchImage[]>([]);
+  const [generationHistory, setGenerationHistory] = useState<HistoryItem[]>([]);
   const [activeImageIndex, setActiveImageIndex] = useState<number>(-1);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus>('idle');
@@ -144,31 +146,59 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
   // Load project state
   useEffect(() => {
-    if (project && project.state) {
-        if (project.state.referenceImage) {
-            setReferenceImage(project.state.referenceImage);
-            lastAnalyzedRefBase64.current = project.state.referenceImage.base64 || null;
-        }
-        if (project.state.targetImages) {
-            // Reset 'queued' or 'processing' status to 'pending' on load to prevent auto-generation
-            const sanitizedImages = project.state.targetImages.map((img: BatchImage) => ({
-                ...img,
-                status: (img.status === 'queued' || img.status === 'processing') ? 'pending' : img.status
-            }));
-            setTargetImages(sanitizedImages);
-        }
-        if (project.state.checklist) setChecklist(project.state.checklist);
-        if (project.state.sceneBlueprint) setSceneBlueprint(project.state.sceneBlueprint);
-        if (project.state.accentColor) setAccentColor(project.state.accentColor);
-        if (project.state.aspectRatio) setAspectRatio(project.state.aspectRatio);
-        if (project.state.customClothingItems) setCustomClothingItems(project.state.customClothingItems);
-        if (project.state.customAccessoryItems) setCustomAccessoryItems(project.state.customAccessoryItems);
-        if (project.state.customFaceItems) setCustomFaceItems(project.state.customFaceItems);
-        if (project.state.customBackgroundItem) setCustomBackgroundItem(project.state.customBackgroundItem);
-        if (project.state.customSkyItem) setCustomSkyItem(project.state.customSkyItem);
-        if (project.state.sessionSeed) setSessionSeed(project.state.sessionSeed);
-        if (project.state.anchorImageId) setAnchorImageId(project.state.anchorImageId);
-    }
+    const state = project?.state || {};
+    const nextReference = state.referenceImage || createEmptyImage();
+    const restoredTargets: BatchImage[] = Array.isArray(state.targetImages)
+      ? state.targetImages.map((img: BatchImage) => ({
+          ...img,
+          status: (img.status === 'queued' || img.status === 'processing') ? 'pending' : img.status,
+        }))
+      : [];
+    const restoredHistory: HistoryItem[] = Array.isArray(state.generationHistory)
+      ? state.generationHistory
+      : [];
+    const fallbackHistory: HistoryItem[] = restoredHistory.length > 0
+      ? restoredHistory
+      : restoredTargets
+          .filter((img) => img.generated)
+          .map((img, index) => ({
+            id: Number(project?.createdAt || Date.now()) + index,
+            projectId: project?.id || 'live-session',
+            generated: img.generated!,
+            target: img.target,
+            reference: nextReference,
+            targetId: img.id,
+            targetFileName: img.target.fileName,
+          }));
+
+    setReferenceImage(nextReference);
+    lastAnalyzedRefBase64.current = nextReference.base64 || null;
+    setTargetImages(restoredTargets);
+    setGenerationHistory(fallbackHistory);
+    setActiveImageIndex(restoredTargets.length > 0 ? 0 : -1);
+    setChecklist(Array.isArray(state.checklist) ? state.checklist : []);
+    setSceneBlueprint(state.sceneBlueprint || null);
+    setAccentColor(state.accentColor || null);
+    setAspectRatio(state.aspectRatio || undefined);
+    setCustomClothingItems(state.customClothingItems || {
+      woman: createInitialItems('clothing', 'woman', 2) as CustomClothingItem[],
+      man: createInitialItems('clothing', 'man', 2) as CustomClothingItem[],
+    });
+    setCustomAccessoryItems(state.customAccessoryItems || {
+      woman: createInitialItems('accessory', 'woman', 2) as CustomAccessoryItem[],
+      man: createInitialItems('accessory', 'man', 2) as CustomAccessoryItem[],
+    });
+    setCustomFaceItems(state.customFaceItems || {
+      woman: createInitialFaceItem(),
+      man: createInitialFaceItem(),
+    });
+    setCustomBackgroundItem(state.customBackgroundItem || createInitialBackgroundItem());
+    setCustomSkyItem(state.customSkyItem || createInitialSkyItem());
+    setSessionSeed(typeof state.sessionSeed === 'number' ? state.sessionSeed : null);
+    setAnchorImageId(typeof state.anchorImageId === 'string' ? state.anchorImageId : null);
+    setSelectedImageIds(new Set());
+    setGenerationStatus('idle');
+    setError(null);
   }, [project?.id]); // Only re-load when project ID changes
 
   useEffect(() => {
@@ -186,9 +216,10 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   // Persist project state
   useEffect(() => {
     if (project) {
-        const generatedImages = targetImages
-            .map(img => img.generated)
-            .filter((img): img is string => !!img);
+        const generatedImages = Array.from(new Set([
+            ...generationHistory.map(item => item.generated).filter((img): img is string => !!img),
+            ...targetImages.map(img => img.generated).filter((img): img is string => !!img),
+        ]));
 
         const updatedProject: Project = {
             ...project,
@@ -208,7 +239,8 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
                 customBackgroundItem,
                 customSkyItem,
                 sessionSeed,
-                anchorImageId
+                anchorImageId,
+                generationHistory
             }
         };
         // Debounce or only save on specific changes to avoid excessive DB writes
@@ -232,6 +264,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     customSkyItem,
     sessionSeed,
     anchorImageId,
+    generationHistory,
     onUpdateProject
   ]);
 
@@ -467,6 +500,94 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
   const handleRemoveCustomSky = useCallback(() => {
     setCustomSkyItem(createInitialSkyItem());
+  }, []);
+
+  const getGenerationSettingsSnapshot = useCallback((): HistoryItem['settings'] => {
+    const customAssets: string[] = [];
+
+    (['woman', 'man'] as const).forEach((gender) => {
+      customClothingItems[gender]
+        .filter((item) => item.enabled && item.status === 'ready' && item.image.base64)
+        .forEach((item, index) => customAssets.push(`${gender} clothing ${index + 1}: ${item.image.fileName || 'custom image'}`));
+      customAccessoryItems[gender]
+        .filter((item) => item.enabled && item.status === 'ready' && item.image.base64)
+        .forEach((item, index) => customAssets.push(`${gender} accessory ${index + 1}: ${item.image.fileName || 'custom image'}`));
+      const faceItem = customFaceItems[gender];
+      if (faceItem.enabled && faceItem.status === 'ready' && faceItem.image.base64) {
+        customAssets.push(`${gender} face: ${faceItem.image.fileName || 'custom image'}`);
+      }
+    });
+
+    if (customBackgroundItem.enabled && customBackgroundItem.status === 'ready' && customBackgroundItem.image.base64) {
+      customAssets.push(`background: ${customBackgroundItem.image.fileName || 'custom image'}`);
+    }
+    if (customSkyItem.enabled && customSkyItem.status === 'ready' && customSkyItem.image.base64) {
+      customAssets.push(`sky: ${customSkyItem.image.fileName || 'custom image'}`);
+    }
+
+    return {
+      aspectRatio: aspectRatio || null,
+      anchorImageId,
+      selectedCategories: checklist
+        .filter((category) => category.intensity > 0 && (category.items.some((item) => item.checked) || Boolean(category.customPrompt)))
+        .map((category) => ({
+          id: category.id,
+          label: category.label,
+          intensity: category.intensity,
+          items: [
+            ...category.items.filter((item) => item.checked).map((item) => item.label),
+            ...(category.customPrompt ? ['Custom background instruction'] : []),
+          ],
+        })),
+      customAssets,
+    };
+  }, [
+    anchorImageId,
+    aspectRatio,
+    checklist,
+    customAccessoryItems,
+    customBackgroundItem,
+    customClothingItems,
+    customFaceItems,
+    customSkyItem,
+  ]);
+
+  const handleSelectGeneration = useCallback((item: HistoryItem) => {
+    setTargetImages(prev => {
+      const existingIndex = prev.findIndex(img => img.id === item.targetId);
+      if (existingIndex >= 0) {
+        const updated = prev.map((img, index) => index === existingIndex ? {
+          ...img,
+          generated: item.generated,
+          status: 'done' as const,
+          target: item.target || img.target,
+        } : img);
+        setActiveImageIndex(existingIndex);
+        return updated;
+      }
+
+      const restoredTarget: BatchImage = {
+        id: item.targetId || `history-${item.id}`,
+        target: item.target,
+        generated: item.generated,
+        status: 'done',
+        dominantColor: null,
+      };
+      setActiveImageIndex(prev.length);
+      return [...prev, restoredTarget];
+    });
+    setIsMobileSidebarOpen(false);
+  }, []);
+
+  const handleExportGeneration = useCallback((item: HistoryItem) => {
+    const link = document.createElement('a');
+    link.href = item.generated;
+    const extension = item.generated.startsWith('data:image/jpeg') ? 'jpg' : 'png';
+    const baseName = (item.targetFileName || item.target?.fileName || 'istudio-generation').replace(/\.[^/.]+$/, '');
+    link.download = `${baseName}-generation-${item.id}.${extension}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }, []);
 
   const runGeneration = useCallback(async (imageIndex: number) => {
@@ -818,13 +939,10 @@ Before outputting, verify:
         if (cancelGenerationRef.current) throw new Error("Cancelled");
 
         const newImageSrc = `data:image/png;base64,${newImageBase64}`;
-        
-        // Update state to show image
-        setTargetImages(prev => prev.map((img, idx) => idx === imageIndex ? { ...img, status: 'done', generated: newImageSrc } : img));
-
-        setGenerationStatus('saving');
-        
-        const historyItemPayload = {
+        const generationId = Date.now();
+        const historyItem: HistoryItem = {
+          id: generationId,
+          projectId: project?.id || 'live-session',
           generated: newImageSrc,
           target: {
             fileName: imageToProcess.target.fileName,
@@ -836,9 +954,16 @@ Before outputting, verify:
             base64: referenceImage.base64,
             mimeType: referenceImage.mimeType,
           },
+          targetId: imageToProcess.id,
+          targetFileName: imageToProcess.target.fileName,
+          settings: getGenerationSettingsSnapshot(),
         };
 
-        await onAddToHistory(historyItemPayload);
+        // Update state to show image
+        setTargetImages(prev => prev.map((img, idx) => idx === imageIndex ? { ...img, status: 'done', generated: newImageSrc } : img));
+        setGenerationHistory(prev => [historyItem, ...prev].slice(0, 200));
+
+        setGenerationStatus('saving');
     } catch (e) {
       const isCancelled = e instanceof Error && e.message === "Cancelled";
       if (isCancelled) {
@@ -855,7 +980,22 @@ Before outputting, verify:
     } finally {
       setGenerationStatus('idle');
     }
-  }, [targetImages, referenceImage, checklist, sceneBlueprint, onAddToHistory, customClothingItems, customAccessoryItems, customFaceItems, customBackgroundItem, customSkyItem, aspectRatio]);
+  }, [
+    anchorImageId,
+    aspectRatio,
+    checklist,
+    customAccessoryItems,
+    customBackgroundItem,
+    customClothingItems,
+    customFaceItems,
+    customSkyItem,
+    getGenerationSettingsSnapshot,
+    project?.id,
+    referenceImage,
+    sceneBlueprint,
+    sessionSeed,
+    targetImages,
+  ]);
 
   // Queue processing effect
   useEffect(() => {
@@ -1180,6 +1320,93 @@ Before outputting, verify:
                   ))
                 )}
               </div>
+            </div>
+          </section>
+
+          {/* Project generation history */}
+          <section>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="flex items-center gap-2 text-xs font-semibold text-[var(--color-text-muted)]">
+                <HistoryIcon className="h-3 w-3 text-[var(--color-accent)]" />
+                Generation History
+              </h2>
+              <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1 text-[10px] font-semibold text-[var(--color-text-muted)]">
+                {generationHistory.length}
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-sm leading-6 text-[var(--color-text-muted)]">
+                Every saved result for this project is stored in the project folder and reloads with the edit.
+              </p>
+
+              {generationHistory.length === 0 ? (
+                <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-5 text-center">
+                  <HistoryIcon className="mx-auto mb-3 h-6 w-6 text-[var(--color-text-muted)] opacity-30" />
+                  <p className="text-xs font-semibold text-[var(--color-text-muted)]">No generations saved yet</p>
+                </div>
+              ) : (
+                <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1 custom-scrollbar">
+                  {generationHistory.map((item) => {
+                    const isActiveHistory = activeTarget?.generated === item.generated;
+                    const selectedSummary = item.settings?.selectedCategories
+                      ?.slice(0, 2)
+                      .map((category) => `${category.label} ${category.intensity}%`)
+                      .join(' / ');
+
+                    return (
+                      <div
+                        key={item.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleSelectGeneration(item)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            handleSelectGeneration(item);
+                          }
+                        }}
+                        className={`group grid w-full grid-cols-[72px_1fr_auto] gap-3 rounded-xl border p-2 text-left transition-all ${
+                          isActiveHistory
+                            ? 'border-[var(--color-accent)] bg-[rgba(var(--color-accent-rgb),0.08)]'
+                            : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)]'
+                        }`}
+                      >
+                        <img
+                          src={item.generated}
+                          alt="Saved generation"
+                          className="h-[72px] w-[72px] rounded-lg object-cover"
+                          loading="lazy"
+                        />
+                        <span className="min-w-0 self-center">
+                          <span className="block truncate text-xs font-semibold text-[var(--color-text)]">
+                            {item.targetFileName || item.target?.fileName || 'Saved generation'}
+                          </span>
+                          <span className="mt-1 block text-[11px] text-[var(--color-text-muted)]">
+                            {new Date(item.id).toLocaleString()}
+                          </span>
+                          {selectedSummary && (
+                            <span className="mt-1 line-clamp-2 block text-[11px] leading-4 text-[var(--color-text-muted)]">
+                              {selectedSummary}
+                            </span>
+                          )}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleExportGeneration(item);
+                          }}
+                          className="flex h-8 w-8 items-center justify-center self-start rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] opacity-80 transition-all group-hover:opacity-100 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+                          aria-label="Export saved generation"
+                        >
+                          <DownloadIcon className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </section>
 

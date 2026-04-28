@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $AppDir = (Resolve-Path (Join-Path $ScriptDir "..")).Path
-$ProjectsDir = if ($env:ISTUDIO_PROJECTS_DIR) { $env:ISTUDIO_PROJECTS_DIR } else { Join-Path $AppDir "projects" }
+$ProjectsDir = Join-Path $AppDir "projects"
 $Headers = @{ "User-Agent" = "ISTUDIO-Launcher" }
 
 function Write-LauncherHeader {
