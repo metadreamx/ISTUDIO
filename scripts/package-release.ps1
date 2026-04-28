@@ -22,7 +22,7 @@ function Copy-RequiredItem {
 
   $item = Get-Item -LiteralPath $source
   if ($item.PSIsContainer) {
-    $target = Join-Path $Destination $item.Name
+    $target = Join-Path $Destination $Name
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     robocopy $source $target /E /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
     if ($LASTEXITCODE -gt 7) {
@@ -103,7 +103,7 @@ function Assert-ReleasePackage {
   )
 
   $requiredPaths = @(
-    "ISTUDIO.bat",
+    "LAUNCH ISTUDIO.bat",
     "ISTUDIO.exe",
     "package.json",
     "dist-server\server.js",
@@ -134,7 +134,7 @@ $stageRoot = Join-Path $releaseDir "stage"
 $appStage = Join-Path $stageRoot "ISTUDIO"
 $zipPath = Join-Path $releaseDir "ISTUDIO-windows.zip"
 $exePath = Join-Path $releaseDir "ISTUDIO.exe"
-$batPath = Join-Path $releaseDir "ISTUDIO.bat"
+$batPath = Join-Path $releaseDir "LAUNCH ISTUDIO.bat"
 
 Push-Location $root
 try {
@@ -162,10 +162,11 @@ try {
 
   $items = @(
     ".env.example",
-    "ISTUDIO.bat",
+    "LAUNCH ISTUDIO.bat",
     "package.json",
     "package-lock.json",
     "README.md",
+    "docs\assets",
     "dist",
     "dist-server",
     "scripts\ISTUDIO-Launcher.ps1",
@@ -230,9 +231,10 @@ try {
     throw "Release zip was not created correctly."
   }
 
-  Write-ReleaseInstaller -Source (Join-Path $root "ISTUDIO.bat") -Destination $batPath -Repo $Repo
+  Write-ReleaseInstaller -Source (Join-Path $root "LAUNCH ISTUDIO.bat") -Destination $batPath -Repo $Repo
   Remove-Item -LiteralPath (Join-Path $releaseDir "Install-ISTUDIO.bat") -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $releaseDir "Install-ISTUDIO.ps1") -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $releaseDir "ISTUDIO.bat") -Force -ErrorAction SilentlyContinue
 
   Write-Host ""
   Write-Host "Release package created:" -ForegroundColor Green

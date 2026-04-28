@@ -14,7 +14,7 @@ internal static class Program
             ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
 
             string appDir = AppDomain.CurrentDomain.BaseDirectory;
-            string localBat = Path.Combine(appDir, "ISTUDIO.bat");
+            string localBat = Path.Combine(appDir, "LAUNCH ISTUDIO.bat");
 
             if (File.Exists(localBat))
             {
@@ -27,7 +27,7 @@ internal static class Program
             Console.WriteLine();
 
             string installerPath = Path.Combine(Path.GetTempPath(), "Install-ISTUDIO-" + Guid.NewGuid() + ".ps1");
-            string installerUrl = "https://raw.githubusercontent.com/" + Repo + "/main/installers/Install-ISTUDIO.ps1";
+            string installerUrl = "https://raw.githubusercontent.com/" + Repo + "/main/scripts/Install-ISTUDIO.ps1";
 
             using (var client = new WebClient())
             {

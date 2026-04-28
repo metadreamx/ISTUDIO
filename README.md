@@ -1,96 +1,82 @@
 # ISTUDIO by Iconic Recordings
 
-ISTUDIO is a Windows-first, reference-based photo editing studio. It lets creators edit target photos from the visual DNA of another image, making it useful for virtual background replacement, relighting, style transfer, and fine element control.
+![ISTUDIO reference edit workspace](docs/assets/istudio-reference-edit.jpg)
 
-The workflow is simple: choose a reference image, import your target photos, describe the edit, and generate a cohesive result that follows the reference while preserving the subject you are editing.
+ISTUDIO is a Windows-first reference-based photo editing app. It lets creators edit target photos from the visual DNA of another image for background replacement, relighting, style transfer, and fine element control.
 
-## What ISTUDIO Does
+## Download And Install
 
-- Reference DNA editing: transfer lighting, mood, color, composition, and environment cues from a reference image.
-- Virtual background replacement: rebuild scenes around a subject with stronger visual consistency.
-- Relighting and style transfer: match studio lighting, editorial tones, campaign looks, and cinematic treatments.
-- Element control: guide clothing, accessories, face, hair, background, and sky behavior with dedicated controls.
-- Local project storage: every project is stored on disk in a real project folder, not browser-only storage.
-- Windows launcher: launch ISTUDIO, check for updates, and install the latest release from one menu.
+For normal users, use the GitHub **Releases** page. Do not use GitHub's green **Code > Download ZIP** button.
 
-## Install on Windows
+1. Open the latest Release for this repo.
+2. Download either `LAUNCH ISTUDIO.bat` or `ISTUDIO.exe`.
+3. Double-click the downloaded launcher.
+4. The launcher downloads the complete ISTUDIO package automatically.
+5. ISTUDIO installs to `%LOCALAPPDATA%\ISTUDIO` and creates a desktop shortcut.
 
-1. Open the latest GitHub Release. Do not use GitHub's green **Code > Download ZIP** button for normal installs.
-2. Download one launcher: `ISTUDIO.exe` or `ISTUDIO.bat`.
-3. Double-click it.
+Users do not need to install Node.js, npm, developer tools, or app dependencies. The release package includes the runtime, dependencies, client build, and server build.
 
-The installer downloads the newest self-contained ISTUDIO package, installs it to:
+## Use ISTUDIO
 
-```text
-%LOCALAPPDATA%\ISTUDIO
-```
+1. Open the desktop shortcut, `ISTUDIO.exe`, or `LAUNCH ISTUDIO.bat`.
+2. Choose `Launch ISTUDIO`.
+3. Import a reference image that contains the lighting, mood, style, or scene DNA you want.
+4. Add target photos.
+5. Refine the edit and export the finished result.
 
-It includes the Node.js runtime, app dependencies, and production build. Users do not need to install Node.js, npm, or developer tools. It also creates a desktop shortcut named `ISTUDIO`.
+The launcher also includes:
 
-If a user sees a Node.js error, they most likely launched the source-code folder instead of the release launcher. Have them run `ISTUDIO.exe` or `ISTUDIO.bat` from the latest Release.
-
-## Launch and Update
-
-Open `ISTUDIO.exe`, `ISTUDIO.bat`, or the desktop shortcut. The launcher shows:
-
-- `Launch ISTUDIO`
 - `Check for updates`
 - `Open projects folder`
 - `Exit`
 
-When an update is available, choose `Check for updates` and confirm the install. Your local projects are preserved during updates.
-
 ## Project Storage
 
-Installed projects live here:
+Installed projects are saved locally here:
 
 ```text
 %LOCALAPPDATA%\ISTUDIO\projects
 ```
 
-Development projects live in this repo's `projects/` folder. Project data stays local on the user's computer.
+Project data stays on the user's computer. Updates preserve projects and `.env.local`.
 
 ## Development
 
-Requirements:
+Requirements for development only:
 
 - Node.js 22 or newer
 - npm
-
-Run locally:
 
 ```powershell
 npm install
 npm run dev
 ```
 
-Build production:
+Build production locally:
 
 ```powershell
 npm run build
 ```
 
-Launch production:
+Launch from this source folder:
 
 ```powershell
-.\ISTUDIO.bat
+.\LAUNCH ISTUDIO.bat
 ```
 
 ## Release Builds
 
-GitHub Actions builds the Windows release package whenever a version tag is pushed.
+GitHub Actions builds the Windows release package whenever a version tag is pushed:
 
 ```powershell
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.0.4
+git push origin v1.0.4
 ```
 
-The release contains:
+The Release should contain only these user-facing downloads:
 
+- `LAUNCH ISTUDIO.bat`
 - `ISTUDIO.exe`
-- `ISTUDIO.bat`
 - `ISTUDIO-windows.zip`
 
-The launcher update check needs at least one published GitHub Release. If it says no release is available, push a version tag and wait for the **Build ISTUDIO Release** action to finish.
-
-For more detail, read [docs/GITHUB_RELEASES.md](docs/GITHUB_RELEASES.md).
+For release details, read [docs/GITHUB_RELEASES.md](docs/GITHUB_RELEASES.md).

@@ -189,7 +189,7 @@ function Assert-IStudioPackage {
   param([string]$PackageRoot)
 
   $requiredPaths = @(
-    "ISTUDIO.bat",
+    "LAUNCH ISTUDIO.bat",
     "ISTUDIO.exe",
     "package.json",
     "dist-server\server.js",
@@ -241,7 +241,7 @@ function Assert-IStudioPackage {
   param([string]$PackageRoot)
 
   $requiredPaths = @(
-    "ISTUDIO.bat",
+    "LAUNCH ISTUDIO.bat",
     "ISTUDIO.exe",
     "package.json",
     "dist-server\server.js",
@@ -286,7 +286,7 @@ try {
   Write-Host "Launching the updated app..."
   Start-Sleep -Seconds 1
   $launcherExe = Join-Path $InstallDir "ISTUDIO.exe"
-  $launcherBat = Join-Path $InstallDir "ISTUDIO.bat"
+  $launcherBat = Join-Path $InstallDir "LAUNCH ISTUDIO.bat"
   $launcherPath = if (Test-Path $launcherExe) { $launcherExe } else { $launcherBat }
   Start-Process -FilePath $launcherPath -WorkingDirectory $InstallDir
 } catch {
@@ -427,6 +427,7 @@ function Assert-InstalledReleasePackage {
     "runtime\node\node.exe",
     "runtime\node\npm.cmd",
     "ISTUDIO.exe",
+    "LAUNCH ISTUDIO.bat",
     "node_modules",
     "dist-server\server.js",
     "dist\index.html",
@@ -439,7 +440,7 @@ function Assert-InstalledReleasePackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "This ISTUDIO install is incomplete. Missing: $($missing -join ', '). Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
+    throw "This ISTUDIO install is incomplete. Missing: $($missing -join ', '). Run ISTUDIO.exe or LAUNCH ISTUDIO.bat again to repair the app."
   }
 }
 
@@ -455,7 +456,7 @@ function Ensure-AppReady {
 
   if (-not $node) {
     if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing the bundled Node.js runtime. Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
+      throw "This ISTUDIO install is missing the bundled Node.js runtime. Run ISTUDIO.exe or LAUNCH ISTUDIO.bat again to repair the app."
     }
     throw "Node.js was not found. Install Node.js 22 for development, or install ISTUDIO from the release installer."
   }
@@ -463,12 +464,12 @@ function Ensure-AppReady {
   $npm = Get-NpmCommand
 
   if ($isReleaseInstall -and -not $hasPortableNode) {
-    throw "This ISTUDIO install is missing the bundled Node.js runtime. Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
+    throw "This ISTUDIO install is missing the bundled Node.js runtime. Run ISTUDIO.exe or LAUNCH ISTUDIO.bat again to repair the app."
   }
 
   if (-not (Test-Path (Join-Path $AppDir "node_modules"))) {
     if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing bundled dependencies. Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
+      throw "This ISTUDIO install is missing bundled dependencies. Run ISTUDIO.exe or LAUNCH ISTUDIO.bat again to repair the app."
     }
     Write-Host ""
     Write-Host "Installing ISTUDIO dependencies..." -ForegroundColor Cyan
@@ -480,7 +481,7 @@ function Ensure-AppReady {
 
   if (-not (Test-Path (Join-Path $AppDir "dist\index.html"))) {
     if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing the production build. Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
+      throw "This ISTUDIO install is missing the production build. Run ISTUDIO.exe or LAUNCH ISTUDIO.bat again to repair the app."
     }
     Write-Host ""
     Write-Host "Building ISTUDIO for production..." -ForegroundColor Cyan
@@ -492,7 +493,7 @@ function Ensure-AppReady {
 
   if (-not (Test-Path (Join-Path $AppDir "dist-server\server.js"))) {
     if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing the production server build. Run ISTUDIO.exe or ISTUDIO.bat again to repair the app."
+      throw "This ISTUDIO install is missing the production server build. Run ISTUDIO.exe or LAUNCH ISTUDIO.bat again to repair the app."
     }
     Write-Host ""
     Write-Host "Building ISTUDIO server for production..." -ForegroundColor Cyan

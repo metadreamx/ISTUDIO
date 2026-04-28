@@ -34,7 +34,7 @@ jobs:
           name: ISTUDIO-windows-release
           path: |
             release/ISTUDIO-windows.zip
-            release/ISTUDIO.bat
+            release/LAUNCH ISTUDIO.bat
             release/ISTUDIO.exe
 
       - name: Publish GitHub release
@@ -46,7 +46,7 @@ jobs:
           $tag = "${{ github.ref_name }}"
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag release/ISTUDIO-windows.zip release/ISTUDIO.bat release/ISTUDIO.exe --clobber
+            gh release upload $tag release/ISTUDIO-windows.zip "release/LAUNCH ISTUDIO.bat" release/ISTUDIO.exe --clobber
           } else {
-            gh release create $tag release/ISTUDIO-windows.zip release/ISTUDIO.bat release/ISTUDIO.exe --title "ISTUDIO $tag" --notes "Windows launcher and self-contained update package for ISTUDIO."
+            gh release create $tag release/ISTUDIO-windows.zip "release/LAUNCH ISTUDIO.bat" release/ISTUDIO.exe --title "ISTUDIO $tag" --notes "Windows launcher and self-contained update package for ISTUDIO."
           }
