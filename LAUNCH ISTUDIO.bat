@@ -5,7 +5,7 @@ title ISTUDIO Setup
 set "ISTUDIO_SELF=%~f0"
 set "ISTUDIO_MODE=%~1"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $self=$env:ISTUDIO_SELF; $mode=$env:ISTUDIO_MODE; $tmp=Join-Path $env:TEMP ('ISTUDIO-Setup-' + [guid]::NewGuid() + '.ps1'); $capture=$false; foreach($line in [System.IO.File]::ReadLines($self)){ if($line -eq '__ISTUDIO_PAYLOAD_B64__'){ break }; if($capture){ [System.IO.File]::AppendAllText($tmp, $line + [Environment]::NewLine, [Text.Encoding]::ASCII) }; if($line -eq '__ISTUDIO_SETUP_PS1__'){ $capture=$true } }; & $tmp -Self $self -Mode $mode; $code=$LASTEXITCODE; Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; exit $code"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $self=$env:ISTUDIO_SELF; $mode=$env:ISTUDIO_MODE; $script=[System.Text.StringBuilder]::new(); $capture=$false; foreach($line in [System.IO.File]::ReadLines($self)){ if($line -eq '__ISTUDIO_PAYLOAD_B64__'){ break }; if($capture){ [void]$script.AppendLine($line) }; if($line -eq '__ISTUDIO_SETUP_PS1__'){ $capture=$true } }; $block=[scriptblock]::Create($script.ToString()); & $block -Self $self -Mode $mode; exit $LASTEXITCODE"
 if errorlevel 1 (
   echo.
   echo ISTUDIO setup did not complete.
@@ -78,6 +78,37 @@ function Get-InstallDirectory {
     return $launcherDir
   }
   return Join-Path $launcherDir "ISTUDIO"
+}
+
+function New-LocalSetupTemp {
+  param([string]$InstallerPath)
+
+  $launcherDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($InstallerPath))
+  $setupRoot = Join-Path $launcherDir ".istudio-setup-temp"
+
+  try {
+    New-Item -ItemType Directory -Force -Path $setupRoot | Out-Null
+    $probePath = Join-Path $setupRoot ".write-test"
+    [System.IO.File]::WriteAllText($probePath, "ok", [System.Text.Encoding]::ASCII)
+    Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+  } catch {
+    throw "ISTUDIO needs to unpack setup files beside the launcher, but this folder is not writable: $launcherDir. Move LAUNCH-ISTUDIO.bat to a writable folder such as Desktop, Documents, or an external drive, then run it again."
+  }
+
+  $tempRoot = Join-Path $setupRoot ("setup-" + [guid]::NewGuid())
+  New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+  return [pscustomobject]@{
+    Root = $setupRoot
+    Work = $tempRoot
+  }
+}
+
+function Remove-LocalSetupTemp {
+  param([object]$SetupTemp)
+
+  if ($SetupTemp -and $SetupTemp.Root -and (Test-Path $SetupTemp.Root)) {
+    Remove-Item -LiteralPath $SetupTemp.Root -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Find-PackageRoot {
@@ -220,12 +251,14 @@ if (Test-IStudioInstall -Path $installDir) {
   Start-IStudio -InstallDir $installDir -ShowMenu:$showMenu
 }
 
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("istudio-setup-" + [guid]::NewGuid())
-$zipPath = Join-Path $tempRoot "ISTUDIO-windows.zip"
-$extractPath = Join-Path $tempRoot "extract"
+$setupTemp = $null
 
 try {
-  New-Item -ItemType Directory -Force -Path $tempRoot, $extractPath | Out-Null
+  $setupTemp = New-LocalSetupTemp -InstallerPath $Self
+  $tempRoot = $setupTemp.Work
+  $zipPath = Join-Path $tempRoot "ISTUDIO-windows.zip"
+  $extractPath = Join-Path $tempRoot "extract"
+  New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
 
   Write-Step -Number 1 -Total 5 -Message "Preparing the bundled app package"
   Export-EmbeddedPackage -InstallerPath $Self -ZipPath $zipPath
@@ -246,6 +279,8 @@ try {
   Write-Host ""
   Write-Host "ISTUDIO is ready." -ForegroundColor Green
   Write-Host ""
+  Remove-LocalSetupTemp -SetupTemp $setupTemp
+  $setupTemp = $null
   Start-Sleep -Milliseconds 700
   Start-IStudio -InstallDir $installDir -ShowMenu:$showMenu
 } catch {
@@ -258,9 +293,7 @@ try {
   Write-Host ""
   exit 1
 } finally {
-  if (Test-Path $tempRoot) {
-    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
-  }
+  Remove-LocalSetupTemp -SetupTemp $setupTemp
 }
 
 __ISTUDIO_PAYLOAD_B64__

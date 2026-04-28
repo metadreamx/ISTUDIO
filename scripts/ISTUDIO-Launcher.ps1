@@ -260,11 +260,41 @@ function Quote-Argument {
   return '"' + ($Value -replace '"', '\"') + '"'
 }
 
+function New-LocalSetupTemp {
+  $baseDir = Split-Path -Parent $AppDir
+  $setupRoot = Join-Path $baseDir ".istudio-setup-temp"
+
+  try {
+    New-Item -ItemType Directory -Force -Path $setupRoot | Out-Null
+    $probePath = Join-Path $setupRoot ".write-test"
+    [System.IO.File]::WriteAllText($probePath, "ok", [System.Text.Encoding]::ASCII)
+    Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+  } catch {
+    throw "ISTUDIO needs to unpack update files beside the installed app, but this folder is not writable: $baseDir. Move the ISTUDIO folder to a writable location such as Desktop, Documents, or an external drive, then run it again."
+  }
+
+  $tempRoot = Join-Path $setupRoot ("update-" + [guid]::NewGuid())
+  New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+  return [pscustomobject]@{
+    Root = $setupRoot
+    Work = $tempRoot
+  }
+}
+
+function Remove-LocalSetupTemp {
+  param([object]$SetupTemp)
+
+  if ($SetupTemp -and $SetupTemp.Root -and (Test-Path $SetupTemp.Root)) {
+    Remove-Item -LiteralPath $SetupTemp.Root -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Start-UpdateApply {
   param(
     [string]$PackageRoot,
     [string]$TagName,
-    [string]$TempRoot
+    [string]$TempRoot,
+    [string]$SetupRoot
   )
 
   $applyScript = Join-Path $TempRoot "Apply-ISTUDIO-Update.ps1"
@@ -272,7 +302,8 @@ function Start-UpdateApply {
 param(
   [string]$PackageRoot,
   [string]$InstallDir,
-  [string]$TagName
+  [string]$TagName,
+  [string]$SetupRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -306,6 +337,12 @@ function Assert-IStudioPackage {
   }
 }
 
+function Remove-SetupRoot {
+  if ($SetupRoot -and (Test-Path $SetupRoot)) {
+    Remove-Item -LiteralPath $SetupRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 try {
   Start-Sleep -Seconds 2
   Write-Step "Applying ISTUDIO update $TagName"
@@ -331,11 +368,13 @@ try {
   Write-Host "Launching the updated app..."
   Start-Sleep -Seconds 1
   $launcherBat = Join-Path $InstallDir "LAUNCH ISTUDIO.bat"
+  Remove-SetupRoot
   Start-Process -FilePath $launcherBat -WorkingDirectory $InstallDir
 } catch {
   Write-Host ""
   Write-Host "ISTUDIO update failed." -ForegroundColor Red
   Write-Host $_.Exception.Message
+  Remove-SetupRoot
   Write-Host ""
   Read-Host "Press Enter to close" | Out-Null
   exit 1
@@ -350,10 +389,11 @@ try {
     "-File $(Quote-Argument $applyScript)",
     "-PackageRoot $(Quote-Argument $PackageRoot)",
     "-InstallDir $(Quote-Argument $AppDir)",
-    "-TagName $(Quote-Argument $TagName)"
+    "-TagName $(Quote-Argument $TagName)",
+    "-SetupRoot $(Quote-Argument $SetupRoot)"
   ) -join " "
 
-  Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory $TempRoot
+  Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $AppDir)
 }
 
 function Install-Update {
@@ -372,37 +412,46 @@ function Install-Update {
     return
   }
 
-  $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("istudio-update-" + [guid]::NewGuid())
-  $zipPath = Join-Path $tempRoot "ISTUDIO-windows.zip"
-  $installerBatPath = Join-Path $tempRoot "LAUNCH-ISTUDIO.bat"
-  $extractPath = Join-Path $tempRoot "extract"
+  $setupTemp = $null
 
-  New-Item -ItemType Directory -Force -Path $tempRoot, $extractPath | Out-Null
+  try {
+    $setupTemp = New-LocalSetupTemp
+    $tempRoot = $setupTemp.Work
+    $zipPath = Join-Path $tempRoot "ISTUDIO-windows.zip"
+    $installerBatPath = Join-Path $tempRoot "LAUNCH-ISTUDIO.bat"
+    $extractPath = Join-Path $tempRoot "extract"
 
-  Write-Host ""
-  Write-Host ("Downloading {0}..." -f $asset.name) -ForegroundColor Cyan
-  if ($assetMode -eq "zip") {
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -Headers $Headers
-  } else {
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installerBatPath -Headers $Headers
+    New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
+
+    Write-Host ""
+    Write-Host ("Downloading {0}..." -f $asset.name) -ForegroundColor Cyan
+    if ($assetMode -eq "zip") {
+      Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -Headers $Headers
+    } else {
+      Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installerBatPath -Headers $Headers
+    }
+
+    Write-Host "Preparing update..." -ForegroundColor Cyan
+    if ($assetMode -eq "zip") {
+      Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+    } else {
+      Expand-IStudioBatPackage -InstallerPath $installerBatPath -DestinationPath $extractPath
+    }
+
+    $packageRoot = Find-PackageRoot -ExtractPath $extractPath
+    Assert-IStudioPackage -PackageRoot $packageRoot
+    Start-UpdateApply -PackageRoot $packageRoot -TagName ([string]$Release.tag_name) -TempRoot $tempRoot -SetupRoot $setupTemp.Root
+    $setupTemp = $null
+
+    Write-Host ""
+    Write-Host "The updater is applying the new version in a separate window." -ForegroundColor Green
+    Write-Host "This launcher will close now."
+    Start-Sleep -Seconds 2
+    exit 0
+  } catch {
+    Remove-LocalSetupTemp -SetupTemp $setupTemp
+    throw
   }
-
-  Write-Host "Preparing update..." -ForegroundColor Cyan
-  if ($assetMode -eq "zip") {
-    Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-  } else {
-    Expand-IStudioBatPackage -InstallerPath $installerBatPath -DestinationPath $extractPath
-  }
-
-  $packageRoot = Find-PackageRoot -ExtractPath $extractPath
-  Assert-IStudioPackage -PackageRoot $packageRoot
-  Start-UpdateApply -PackageRoot $packageRoot -TagName ([string]$Release.tag_name) -TempRoot $tempRoot
-
-  Write-Host ""
-  Write-Host "The updater is applying the new version in a separate window." -ForegroundColor Green
-  Write-Host "This launcher will close now."
-  Start-Sleep -Seconds 2
-  exit 0
 }
 
 function Check-ForUpdates {

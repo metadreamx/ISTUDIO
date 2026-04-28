@@ -11,6 +11,7 @@ ISTUDIO is a Windows-first reference-based photo editing app. It lets creators e
 Place `LAUNCH-ISTUDIO.bat` in the folder where you want ISTUDIO installed, then double-click it. The installer creates an `ISTUDIO` folder beside the BAT, installs the complete app there, and starts ISTUDIO.
 
 Users do not need to install anything else. The release package includes everything ISTUDIO needs to run.
+Setup scratch files are unpacked beside the BAT in `.istudio-setup-temp` and removed after setup.
 
 ## Use ISTUDIO
 

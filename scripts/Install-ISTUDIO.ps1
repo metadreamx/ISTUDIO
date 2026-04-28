@@ -27,6 +27,37 @@ function Assert-SafeInstallDir {
   return $fullPath
 }
 
+function New-LocalSetupTemp {
+  param([string]$InstallDir)
+
+  $baseDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($InstallDir))
+  $setupRoot = Join-Path $baseDir ".istudio-setup-temp"
+
+  try {
+    New-Item -ItemType Directory -Force -Path $setupRoot | Out-Null
+    $probePath = Join-Path $setupRoot ".write-test"
+    [System.IO.File]::WriteAllText($probePath, "ok", [System.Text.Encoding]::ASCII)
+    Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+  } catch {
+    throw "ISTUDIO needs to unpack setup files beside the launcher, but this folder is not writable: $baseDir. Move LAUNCH-ISTUDIO.bat to a writable folder such as Desktop, Documents, or an external drive, then run it again."
+  }
+
+  $tempRoot = Join-Path $setupRoot ("install-" + [guid]::NewGuid())
+  New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+  return [pscustomobject]@{
+    Root = $setupRoot
+    Work = $tempRoot
+  }
+}
+
+function Remove-LocalSetupTemp {
+  param([object]$SetupTemp)
+
+  if ($SetupTemp -and $SetupTemp.Root -and (Test-Path $SetupTemp.Root)) {
+    Remove-Item -LiteralPath $SetupTemp.Root -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Find-PackageRoot {
   param([string]$ExtractPath)
 
@@ -157,12 +188,15 @@ if ([string]::IsNullOrWhiteSpace($Repo)) {
 
 $InstallDir = Assert-SafeInstallDir -Path $InstallDir
 $headers = @{ "User-Agent" = "ISTUDIO-Installer" }
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("istudio-install-" + [guid]::NewGuid())
-$zipPath = Join-Path $tempRoot "ISTUDIO-windows.zip"
-$installerBatPath = Join-Path $tempRoot "LAUNCH-ISTUDIO.bat"
-$extractPath = Join-Path $tempRoot "extract"
+$setupTemp = $null
 
 try {
+  $setupTemp = New-LocalSetupTemp -InstallDir $InstallDir
+  $tempRoot = $setupTemp.Work
+  $zipPath = Join-Path $tempRoot "ISTUDIO-windows.zip"
+  $installerBatPath = Join-Path $tempRoot "LAUNCH-ISTUDIO.bat"
+  $extractPath = Join-Path $tempRoot "extract"
+
   Write-Step "Finding the latest ISTUDIO release"
   $release = Get-LatestRelease
   $asset = Get-ReleaseZipAsset -Release $release
@@ -175,7 +209,7 @@ try {
     throw "The ISTUDIO release package is missing. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
   }
 
-  New-Item -ItemType Directory -Force -Path $tempRoot, $extractPath | Out-Null
+  New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
 
   Write-Step "Downloading $($asset.name)"
   if ($assetMode -eq "zip") {
@@ -236,6 +270,8 @@ try {
       if (-not (Test-Path $launcherScript)) {
         throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
       }
+      Remove-LocalSetupTemp -SetupTemp $setupTemp
+      $setupTemp = $null
       if ($LaunchInline) {
         & $launcherScript -Repo $Repo -AutoLaunch
       } else {
@@ -248,8 +284,6 @@ try {
     }
   }
 } finally {
-  if (Test-Path $tempRoot) {
-    Remove-Item -LiteralPath $tempRoot -Recurse -Force
-  }
+  Remove-LocalSetupTemp -SetupTemp $setupTemp
 }
 
