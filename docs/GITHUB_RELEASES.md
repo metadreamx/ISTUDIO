@@ -11,7 +11,7 @@ Each GitHub Release should expose only:
 
 Tell users to download `LAUNCH ISTUDIO.bat`. That single launcher installs or repairs ISTUDIO, then starts the app in one run. Users can open the maintenance menu with `LAUNCH ISTUDIO.bat menu`.
 
-Users should not use GitHub's **Code > Download ZIP** button because source zips do not include ignored runtime folders such as `runtime/`, `node_modules/`, `dist/`, or `dist-server/`.
+Users should not use GitHub's **Code > Download ZIP** button. The only supported install path is `LAUNCH ISTUDIO.bat` from GitHub Releases.
 
 ## What The Package Contains
 
@@ -25,7 +25,7 @@ Users should not use GitHub's **Code > Download ZIP** button because source zips
 - `scripts/ISTUDIO-Launcher.ps1`
 - `LAUNCH ISTUDIO.bat`
 
-The package script and installer both validate these files before shipping or installing.
+The launcher validates these files before starting ISTUDIO.
 
 ## Install And Update Flow
 
@@ -43,11 +43,6 @@ It preserves:
 
 The installed launcher can also check for updates and replace the app with the newest GitHub Release package.
 
-## Create A Release
+## User Support
 
-```powershell
-git tag v1.0.4
-git push origin v1.0.4
-```
-
-After GitHub Actions finishes, the release endpoint exists and the launcher can install/update users.
+If install or launch fails, ask the user to download the latest `LAUNCH ISTUDIO.bat` from GitHub Releases and run it again.

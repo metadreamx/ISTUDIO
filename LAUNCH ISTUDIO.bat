@@ -2,16 +2,14 @@
 setlocal
 
 title LAUNCH ISTUDIO
-set "CURRENT_DIR=%~dp0"
-set "INSTALL_DIR=%LOCALAPPDATA%\ISTUDIO\"
+set "INSTALL_DIR=%LOCALAPPDATA%\ISTUDIO"
 set "ISTUDIO_REPO=metadreamx/ISTUDIO"
 set "LAUNCH_MODE=-AutoLaunch"
+set "INSTALL_MODE=-LaunchInline"
 
-if /I "%~1"=="menu" set "LAUNCH_MODE="
-if /I "%~1"=="/menu" set "LAUNCH_MODE="
-if /I "%~1"=="--menu" set "LAUNCH_MODE="
-
-cd /d "%CURRENT_DIR%"
+if /I "%~1"=="menu" set "LAUNCH_MODE=" & set "INSTALL_MODE=-MenuInline"
+if /I "%~1"=="/menu" set "LAUNCH_MODE=" & set "INSTALL_MODE=-MenuInline"
+if /I "%~1"=="--menu" set "LAUNCH_MODE=" & set "INSTALL_MODE=-MenuInline"
 
 echo.
 echo ========================================
@@ -19,47 +17,39 @@ echo   LAUNCH ISTUDIO
 echo ========================================
 echo.
 
-set "APP_DIR=%CURRENT_DIR%"
-if exist "%CURRENT_DIR%scripts\ISTUDIO-Launcher.ps1" (
-  if exist "%CURRENT_DIR%runtime\node\node.exe" goto launch_app
-  where node >nul 2>nul
-  if not errorlevel 1 goto launch_app
-)
-
-if exist "%INSTALL_DIR%scripts\ISTUDIO-Launcher.ps1" (
-  if exist "%INSTALL_DIR%runtime\node\node.exe" (
-    set "APP_DIR=%INSTALL_DIR%"
-    goto launch_app
+if exist "%INSTALL_DIR%\LAUNCH ISTUDIO.bat" (
+  if exist "%INSTALL_DIR%\scripts\ISTUDIO-Launcher.ps1" (
+    if exist "%INSTALL_DIR%\runtime\node\node.exe" (
+      if exist "%INSTALL_DIR%\runtime\node\npm.cmd" (
+        if exist "%INSTALL_DIR%\node_modules" (
+          if exist "%INSTALL_DIR%\dist\index.html" (
+            if exist "%INSTALL_DIR%\dist-server\server.js" goto launch_app
+          )
+        )
+      )
+    )
   )
 )
 
 echo Installing or repairing ISTUDIO automatically...
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $repo='%ISTUDIO_REPO%'; $installDir='%INSTALL_DIR%'; $local=Join-Path '%CURRENT_DIR%' 'scripts\Install-ISTUDIO.ps1'; if (Test-Path $local) { & powershell -NoProfile -ExecutionPolicy Bypass -File $local -Repo $repo -InstallDir $installDir -NoLaunch } else { $tmp=Join-Path $env:TEMP ('Install-ISTUDIO-' + [guid]::NewGuid() + '.ps1'); $url='https://raw.githubusercontent.com/' + $repo + '/main/scripts/Install-ISTUDIO.ps1'; Invoke-WebRequest -Uri $url -OutFile $tmp -Headers @{ 'User-Agent'='ISTUDIO-Launcher' }; & powershell -NoProfile -ExecutionPolicy Bypass -File $tmp -Repo $repo -InstallDir $installDir -NoLaunch }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $repo='%ISTUDIO_REPO%'; $installDir='%INSTALL_DIR%'; $tmp=Join-Path $env:TEMP ('Install-ISTUDIO-' + [guid]::NewGuid() + '.ps1'); $url='https://raw.githubusercontent.com/' + $repo + '/main/scripts/Install-ISTUDIO.ps1'; Invoke-WebRequest -Uri $url -OutFile $tmp -Headers @{ 'User-Agent'='ISTUDIO-Launcher' }; & powershell -NoProfile -ExecutionPolicy Bypass -File $tmp -Repo $repo -InstallDir $installDir %INSTALL_MODE%"
 if errorlevel 1 (
   echo.
   echo ISTUDIO install or repair failed.
+  echo Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again.
   pause
   exit /b 1
 )
-
-if exist "%INSTALL_DIR%scripts\ISTUDIO-Launcher.ps1" (
-  set "APP_DIR=%INSTALL_DIR%"
-  goto launch_app
-)
-
-echo.
-echo ISTUDIO installed, but the launcher was not found in "%INSTALL_DIR%".
-pause
-exit /b 1
+exit /b 0
 
 :launch_app
-cd /d "%APP_DIR%"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_DIR%scripts\ISTUDIO-Launcher.ps1" %LAUNCH_MODE%
+cd /d "%INSTALL_DIR%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%INSTALL_DIR%\scripts\ISTUDIO-Launcher.ps1" %LAUNCH_MODE%
 if errorlevel 1 (
   echo.
   echo ISTUDIO closed with an error.
-  echo If this keeps happening, run this file again to repair the installation.
+  echo Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again.
   pause
   exit /b 1
 )

@@ -14,7 +14,7 @@ For normal users, use the GitHub **Releases** page. Do not use GitHub's green **
 4. The launcher downloads the complete ISTUDIO package automatically, installs it, and starts ISTUDIO.
 5. ISTUDIO installs to `%LOCALAPPDATA%\ISTUDIO` and creates a desktop shortcut.
 
-Users do not need to install Node.js, npm, developer tools, or app dependencies. The release package includes the runtime, dependencies, client build, and server build.
+Users do not need to install anything else. The release package includes everything ISTUDIO needs to run.
 
 ## Use ISTUDIO
 
@@ -46,48 +46,15 @@ Installed projects are saved locally here:
 
 Project data stays on the user's computer. Updates preserve projects and `.env.local`.
 
-## Development
+## Updates
 
-Requirements for development only:
-
-- Node.js 22 or newer
-- npm
-
-```powershell
-npm install
-npm run dev
-```
-
-Build production locally:
-
-```powershell
-npm run build
-```
-
-Launch from this source folder:
-
-```powershell
-.\LAUNCH ISTUDIO.bat
-```
-
-Open the maintenance menu:
+ISTUDIO updates are published through GitHub Releases.
 
 ```powershell
 .\LAUNCH ISTUDIO.bat menu
 ```
 
-## Release Builds
-
-GitHub Actions builds the Windows release package whenever a version tag is pushed:
-
-```powershell
-git tag v1.0.4
-git push origin v1.0.4
-```
-
-The Release should contain only these user-facing downloads:
+The maintenance menu can check for updates and open the local projects folder. Releases contain only these user-facing downloads:
 
 - `LAUNCH ISTUDIO.bat`
 - `ISTUDIO-windows.zip`
-
-For release details, read [docs/GITHUB_RELEASES.md](docs/GITHUB_RELEASES.md).

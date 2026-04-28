@@ -2,7 +2,9 @@
 param(
   [string]$Repo = "metadreamx/ISTUDIO",
   [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "ISTUDIO"),
-  [switch]$NoLaunch
+  [switch]$NoLaunch,
+  [switch]$LaunchInline,
+  [switch]$MenuInline
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,7 +62,7 @@ function Assert-IStudioPackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "The downloaded ISTUDIO package is incomplete. Missing: $($missing -join ', ')"
+    throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
   }
 }
 
@@ -76,16 +78,16 @@ function Get-LatestRelease {
     if ($statusCode -eq 404) {
       try {
         Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo" -Headers $headers -TimeoutSec 15 | Out-Null
-        throw "No GitHub Release has been published for ISTUDIO yet. Push a version tag, wait for GitHub Actions to finish, then run this installer again."
+        throw "ISTUDIO release is not published yet. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases after the release is available."
       } catch {
-        if ($_.Exception.Message -like "No GitHub Release*") {
+        if ($_.Exception.Message -like "ISTUDIO release is not published yet*") {
           throw
         }
-        throw "GitHub could not find $Repo. Make sure the repository is public and the installer is pointed at the right repo."
+        throw "ISTUDIO release is not available. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
       }
     }
 
-    throw "Could not reach GitHub releases for $Repo. Check your internet connection and try again. $($_.Exception.Message)"
+    throw "Could not reach ISTUDIO releases. Check your internet connection, then run LAUNCH ISTUDIO.bat again. $($_.Exception.Message)"
   }
 }
 
@@ -107,7 +109,7 @@ try {
     $asset = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
   }
   if (-not $asset) {
-    throw "No Windows zip asset was found on the latest GitHub release."
+    throw "The ISTUDIO release package is missing. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   New-Item -ItemType Directory -Force -Path $tempRoot, $extractPath | Out-Null
@@ -158,8 +160,21 @@ try {
 
   if (-not $NoLaunch) {
     Write-Step "Launching ISTUDIO"
-    $launcherBat = Join-Path $InstallDir "LAUNCH ISTUDIO.bat"
-    Start-Process -FilePath $launcherBat -WorkingDirectory $InstallDir
+    if ($LaunchInline -or $MenuInline) {
+      $launcherScript = Join-Path $InstallDir "scripts\ISTUDIO-Launcher.ps1"
+      if (-not (Test-Path $launcherScript)) {
+        throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
+      }
+      if ($LaunchInline) {
+        & $launcherScript -Repo $Repo -AutoLaunch
+      } else {
+        & $launcherScript -Repo $Repo
+      }
+      exit $LASTEXITCODE
+    } else {
+      $launcherBat = Join-Path $InstallDir "LAUNCH ISTUDIO.bat"
+      Start-Process -FilePath $launcherBat -WorkingDirectory $InstallDir
+    }
   }
 } finally {
   if (Test-Path $tempRoot) {

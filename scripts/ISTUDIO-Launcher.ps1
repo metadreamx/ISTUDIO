@@ -30,9 +30,9 @@ function Write-LauncherHeader {
   } elseif ($UpdateState -and $UpdateState.Status -eq "current") {
     Write-Host ("Latest version    : {0} installed" -f $UpdateState.LatestTag) -ForegroundColor Green
   } elseif ($UpdateState -and $UpdateState.Status -eq "no-release") {
-    Write-Host "Latest version    : no GitHub Release published" -ForegroundColor DarkYellow
+    Write-Host "Latest version    : ISTUDIO release is not published yet" -ForegroundColor DarkYellow
   } elseif ($UpdateState -and $UpdateState.Status -eq "repo-unavailable") {
-    Write-Host "Latest version    : GitHub repo unavailable" -ForegroundColor DarkYellow
+    Write-Host "Latest version    : ISTUDIO release is not available" -ForegroundColor DarkYellow
   } elseif ($UpdateState -and $UpdateState.Status -eq "unavailable") {
     Write-Host "Latest version    : update check unavailable" -ForegroundColor DarkYellow
   } else {
@@ -108,13 +108,13 @@ function Get-LatestRelease {
         return [pscustomobject]@{
           Status = "no-release"
           Release = $null
-          Message = "The GitHub repository exists, but it does not have a published Release yet."
+          Message = "ISTUDIO release is not published yet."
         }
       } catch {
         return [pscustomobject]@{
           Status = "repo-unavailable"
           Release = $null
-          Message = "GitHub could not find $Repo. The repository may be private, renamed, or not pushed yet."
+          Message = "ISTUDIO release is not available."
         }
       }
     }
@@ -205,7 +205,7 @@ function Assert-IStudioPackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "The downloaded ISTUDIO package is incomplete. Missing: $($missing -join ', ')"
+    throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
   }
 }
 
@@ -256,7 +256,7 @@ function Assert-IStudioPackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "The downloaded ISTUDIO package is incomplete. Missing: $($missing -join ', ')"
+    throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
   }
 }
 
@@ -351,20 +351,16 @@ function Check-ForUpdates {
 
   if ($state.Status -eq "no-release") {
     Write-Host ""
-    Write-Host "No GitHub Release has been published for ISTUDIO yet." -ForegroundColor Yellow
-    Write-Host "Push a version tag such as v1.0.1, then let GitHub Actions create the release package."
-    Write-Host ""
-    Write-Host "Commands:"
-    Write-Host "  git tag v1.0.1"
-    Write-Host "  git push origin v1.0.1"
+    Write-Host "ISTUDIO release is not published yet." -ForegroundColor Yellow
+    Write-Host "Download the latest LAUNCH ISTUDIO.bat from GitHub Releases after the release is available."
     Pause-Launcher
     return $state
   }
 
   if ($state.Status -eq "repo-unavailable") {
     Write-Host ""
-    Write-Host "GitHub could not find metadreamx/ISTUDIO from this launcher." -ForegroundColor Yellow
-    Write-Host "Make sure the repo is public or publish releases from a public repo users can access."
+    Write-Host "ISTUDIO release is not available." -ForegroundColor Yellow
+    Write-Host "Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
     Pause-Launcher
     return $state
   }
@@ -406,19 +402,6 @@ function Add-PortableNodeToPath {
   return $false
 }
 
-function Get-NpmCommand {
-  $null = Add-PortableNodeToPath
-  $npm = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
-  if (-not $npm) {
-    throw "npm was not found. Install Node.js 22 or install ISTUDIO from the release installer."
-  }
-  return $npm.Source
-}
-
-function Test-ReleaseInstall {
-  return (Test-Path (Join-Path $AppDir ".istudio-release")) -or (Test-Path (Join-Path $AppDir "runtime"))
-}
-
 function Assert-InstalledReleasePackage {
   $requiredPaths = @(
     "runtime\node\node.exe",
@@ -436,70 +419,33 @@ function Assert-InstalledReleasePackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "This ISTUDIO install is incomplete. Missing: $($missing -join ', '). Run LAUNCH ISTUDIO.bat again to repair the app."
+    throw "This ISTUDIO install is incomplete. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')."
   }
 }
 
 function Ensure-AppReady {
   $hasPortableNode = Add-PortableNodeToPath
-  $isReleaseInstall = Test-ReleaseInstall
+  Assert-InstalledReleasePackage
 
-  if ($isReleaseInstall) {
-    Assert-InstalledReleasePackage
-  }
+  $node = Join-Path $AppDir "runtime\node\node.exe"
 
-  $node = Get-Command "node.exe" -ErrorAction SilentlyContinue
-
-  if (-not $node) {
-    if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing the bundled Node.js runtime. Run LAUNCH ISTUDIO.bat again to repair the app."
-    }
-    throw "Node.js was not found. Install Node.js 22 for development, or install ISTUDIO from the release installer."
-  }
-
-  $npm = Get-NpmCommand
-
-  if ($isReleaseInstall -and -not $hasPortableNode) {
-    throw "This ISTUDIO install is missing the bundled Node.js runtime. Run LAUNCH ISTUDIO.bat again to repair the app."
+  if (-not $hasPortableNode -or -not (Test-Path $node)) {
+    throw "ISTUDIO is missing its bundled runtime. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   if (-not (Test-Path (Join-Path $AppDir "node_modules"))) {
-    if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing bundled dependencies. Run LAUNCH ISTUDIO.bat again to repair the app."
-    }
-    Write-Host ""
-    Write-Host "Installing ISTUDIO dependencies..." -ForegroundColor Cyan
-    & $npm install 2>&1 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
-      throw "Dependency installation failed."
-    }
+    throw "ISTUDIO is missing bundled app files. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   if (-not (Test-Path (Join-Path $AppDir "dist\index.html"))) {
-    if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing the production build. Run LAUNCH ISTUDIO.bat again to repair the app."
-    }
-    Write-Host ""
-    Write-Host "Building ISTUDIO for production..." -ForegroundColor Cyan
-    & $npm run build 2>&1 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
-      throw "Production build failed."
-    }
+    throw "ISTUDIO is missing bundled app files. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   if (-not (Test-Path (Join-Path $AppDir "dist-server\server.js"))) {
-    if ($isReleaseInstall) {
-      throw "This ISTUDIO install is missing the production server build. Run LAUNCH ISTUDIO.bat again to repair the app."
-    }
-    Write-Host ""
-    Write-Host "Building ISTUDIO server for production..." -ForegroundColor Cyan
-    & $npm run build:server 2>&1 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
-      throw "Production server build failed."
-    }
+    throw "ISTUDIO is missing bundled app files. Download the latest LAUNCH ISTUDIO.bat from GitHub Releases and run it again."
   }
 
-  $script:NpmCommand = $npm
+  $script:NodeCommand = $node
 }
 
 function Launch-IStudio {
@@ -507,7 +453,7 @@ function Launch-IStudio {
   Write-Host "Starting ISTUDIO..." -ForegroundColor Cyan
 
   Ensure-AppReady
-  $npm = $script:NpmCommand
+  $node = $script:NodeCommand
   New-Item -ItemType Directory -Force -Path $ProjectsDir | Out-Null
 
   $env:NODE_ENV = "production"
@@ -527,7 +473,7 @@ function Launch-IStudio {
 
   Push-Location $AppDir
   try {
-    & $npm run start
+    & $node "dist-server/server.js"
   } finally {
     Pop-Location
   }
@@ -538,12 +484,13 @@ function Open-ProjectsFolder {
   Start-Process -FilePath $ProjectsDir
 }
 
-$script:UpdateState = Get-UpdateState -Quiet
-
 if ($AutoLaunch) {
+  $script:UpdateState = $null
   Launch-IStudio
   exit $LASTEXITCODE
 }
+
+$script:UpdateState = Get-UpdateState -Quiet
 
 while ($true) {
   Write-LauncherHeader $script:UpdateState

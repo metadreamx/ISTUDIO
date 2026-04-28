@@ -56,6 +56,24 @@ function Write-ReleaseInstaller {
   Set-Content -LiteralPath $Destination -Value $content -Encoding ascii
 }
 
+function Write-ReleasePackageJson {
+  param(
+    [string]$Root,
+    [string]$Destination
+  )
+
+  $sourcePackage = Get-Content -LiteralPath (Join-Path $Root "package.json") -Raw | ConvertFrom-Json
+  $releasePackage = [ordered]@{
+    name = $sourcePackage.name
+    version = $sourcePackage.version
+    description = $sourcePackage.description
+    private = $true
+    type = "module"
+  }
+
+  $releasePackage | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $Destination "package.json") -Encoding ascii
+}
+
 function Assert-ReleasePackage {
   param(
     [string]$PackageRoot,
@@ -118,10 +136,7 @@ try {
   New-Item -ItemType Directory -Force -Path $appStage, $releaseDir | Out-Null
 
   $items = @(
-    ".env.example",
     "LAUNCH ISTUDIO.bat",
-    "package.json",
-    "package-lock.json",
     "README.md",
     "docs\assets",
     "dist",
@@ -133,6 +148,7 @@ try {
   foreach ($item in $items) {
     Copy-RequiredItem -Name $item -Root $root -Destination $appStage
   }
+  Write-ReleasePackageJson -Root $root -Destination $appStage
 
   New-Item -ItemType Directory -Force -Path (Join-Path $appStage "projects") | Out-Null
 
