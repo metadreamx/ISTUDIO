@@ -15,6 +15,7 @@ release
 runtime
 .chrome-qa*
 ui-overhaul-*.png
+.istudio-release
 *.local
 
 # Editor directories and files

@@ -89,4 +89,6 @@ The release contains:
 - `Install-ISTUDIO.ps1`
 - `ISTUDIO-windows.zip`
 
+The launcher update check needs at least one published GitHub Release. If it says no release is available, push a version tag and wait for the **Build ISTUDIO Release** action to finish.
+
 For more detail, read [docs/GITHUB_RELEASES.md](docs/GITHUB_RELEASES.md).

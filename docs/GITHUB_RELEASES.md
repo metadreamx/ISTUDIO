@@ -36,6 +36,15 @@ Users can run the same installer again, or choose **Check for updates** inside `
 - `%LOCALAPPDATA%\ISTUDIO\projects`
 - `%LOCALAPPDATA%\ISTUDIO\.env.local`
 
+If the launcher reports a `404` from GitHub, the repo does not have a published release yet or the repo is private. Push a version tag and wait for the release workflow to finish:
+
+```powershell
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+After GitHub Actions finishes, the latest release endpoint will exist and the launcher can download updates.
+
 ## Local Release Package
 
 To build the same release files locally:

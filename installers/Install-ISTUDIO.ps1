@@ -77,6 +77,8 @@ try {
       Copy-Item -LiteralPath $_.FullName -Destination $InstallDir -Recurse -Force
     }
 
+  Set-Content -LiteralPath (Join-Path $InstallDir ".istudio-release") -Value ([string]$release.tag_name) -Encoding ascii
+
   Write-Step "Creating the desktop launcher"
   try {
     $desktop = [Environment]::GetFolderPath("Desktop")

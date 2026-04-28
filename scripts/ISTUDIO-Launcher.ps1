@@ -28,6 +28,10 @@ function Write-LauncherHeader {
     Write-Host ("Latest version    : {0} available" -f $UpdateState.LatestTag) -ForegroundColor Yellow
   } elseif ($UpdateState -and $UpdateState.Status -eq "current") {
     Write-Host ("Latest version    : {0} installed" -f $UpdateState.LatestTag) -ForegroundColor Green
+  } elseif ($UpdateState -and $UpdateState.Status -eq "no-release") {
+    Write-Host "Latest version    : no GitHub Release published" -ForegroundColor DarkYellow
+  } elseif ($UpdateState -and $UpdateState.Status -eq "repo-unavailable") {
+    Write-Host "Latest version    : GitHub repo unavailable" -ForegroundColor DarkYellow
   } elseif ($UpdateState -and $UpdateState.Status -eq "unavailable") {
     Write-Host "Latest version    : update check unavailable" -ForegroundColor DarkYellow
   } else {
@@ -42,6 +46,18 @@ function Pause-Launcher {
 }
 
 function Get-CurrentVersion {
+  $releasePath = Join-Path $AppDir ".istudio-release"
+  if (Test-Path $releasePath) {
+    try {
+      $releaseVersion = (Get-Content -LiteralPath $releasePath -Raw).Trim()
+      if (-not [string]::IsNullOrWhiteSpace($releaseVersion)) {
+        return $releaseVersion
+      }
+    } catch {
+      # Fall back to package.json below.
+    }
+  }
+
   $packagePath = Join-Path $AppDir "package.json"
   if (-not (Test-Path $packagePath)) {
     return "0.0.0"
@@ -73,27 +89,60 @@ function Get-LatestRelease {
   param([switch]$Quiet)
 
   try {
-    return Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers $Headers -TimeoutSec 10
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers $Headers -TimeoutSec 10
+    return [pscustomobject]@{
+      Status = "ok"
+      Release = $release
+      Message = $null
+    }
   } catch {
+    $statusCode = $null
+    if ($_.Exception.Response) {
+      $statusCode = [int]$_.Exception.Response.StatusCode
+    }
+
+    if ($statusCode -eq 404) {
+      try {
+        Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo" -Headers $Headers -TimeoutSec 10 | Out-Null
+        return [pscustomobject]@{
+          Status = "no-release"
+          Release = $null
+          Message = "The GitHub repository exists, but it does not have a published Release yet."
+        }
+      } catch {
+        return [pscustomobject]@{
+          Status = "repo-unavailable"
+          Release = $null
+          Message = "GitHub could not find $Repo. The repository may be private, renamed, or not pushed yet."
+        }
+      }
+    }
+
     if (-not $Quiet) {
       Write-Warning "Could not reach GitHub releases for $Repo. $($_.Exception.Message)"
     }
-    return $null
+    return [pscustomobject]@{
+      Status = "unavailable"
+      Release = $null
+      Message = $_.Exception.Message
+    }
   }
 }
 
 function Get-UpdateState {
   param([switch]$Quiet)
 
-  $release = Get-LatestRelease -Quiet:$Quiet
-  if (-not $release) {
+  $latest = Get-LatestRelease -Quiet:$Quiet
+  if ($latest.Status -ne "ok") {
     return [pscustomobject]@{
-      Status = "unavailable"
+      Status = $latest.Status
       Release = $null
       LatestTag = $null
+      Message = $latest.Message
     }
   }
 
+  $release = $latest.Release
   $current = ConvertTo-Version (Get-CurrentVersion)
   $latest = ConvertTo-Version ([string]$release.tag_name)
   $status = if ($latest -gt $current) { "available" } else { "current" }
@@ -102,6 +151,7 @@ function Get-UpdateState {
     Status = $status
     Release = $release
     LatestTag = [string]$release.tag_name
+    Message = $null
   }
 }
 
@@ -252,9 +302,32 @@ function Check-ForUpdates {
   Write-Host "Checking GitHub releases for updates..." -ForegroundColor Cyan
   $state = Get-UpdateState
 
+  if ($state.Status -eq "no-release") {
+    Write-Host ""
+    Write-Host "No GitHub Release has been published for ISTUDIO yet." -ForegroundColor Yellow
+    Write-Host "Push a version tag such as v1.0.1, then let GitHub Actions create the release package."
+    Write-Host ""
+    Write-Host "Commands:"
+    Write-Host "  git tag v1.0.1"
+    Write-Host "  git push origin v1.0.1"
+    Pause-Launcher
+    return $state
+  }
+
+  if ($state.Status -eq "repo-unavailable") {
+    Write-Host ""
+    Write-Host "GitHub could not find metadreamx/ISTUDIO from this launcher." -ForegroundColor Yellow
+    Write-Host "Make sure the repo is public or publish releases from a public repo users can access."
+    Pause-Launcher
+    return $state
+  }
+
   if ($state.Status -eq "unavailable") {
     Write-Host ""
     Write-Host "Update check unavailable. Check your internet connection or try again later." -ForegroundColor Yellow
+    if ($state.Message) {
+      Write-Host $state.Message
+    }
     Pause-Launcher
     return $state
   }
