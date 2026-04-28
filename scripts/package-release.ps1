@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [string]$Repo = "",
+  [string]$Repo = "metadreamx/ISTUDIO",
   [string]$NodeVersion = "22.15.0",
   [switch]$SkipChecks,
   [switch]$SkipPortableNode
@@ -44,6 +44,7 @@ function Write-ReleaseInstaller {
   $content = Get-Content -LiteralPath $Source -Raw
   if (-not [string]::IsNullOrWhiteSpace($Repo)) {
     $content = $content.Replace("YOUR_GITHUB_USERNAME/ISTUDIO", $Repo)
+    $content = $content.Replace("metadreamx/ISTUDIO", $Repo)
   }
   Set-Content -LiteralPath $Destination -Value $content -Encoding ascii
 }
@@ -86,6 +87,7 @@ try {
     "package.json",
     "package-lock.json",
     "presets.ts",
+    "README.md",
     "server.ts",
     "sw.js",
     "tsconfig.json",
@@ -94,7 +96,10 @@ try {
     "components",
     "data",
     "dist",
+    "docs",
+    "installers",
     "public",
+    "scripts",
     "services",
     "src",
     "types",

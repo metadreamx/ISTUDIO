@@ -2,7 +2,7 @@
 setlocal
 
 title ISTUDIO Installer
-set "ISTUDIO_REPO=YOUR_GITHUB_USERNAME/ISTUDIO"
+set "ISTUDIO_REPO=metadreamx/ISTUDIO"
 
 echo.
 echo ========================================

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [string]$Repo = "YOUR_GITHUB_USERNAME/ISTUDIO",
+  [string]$Repo = "metadreamx/ISTUDIO",
   [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "ISTUDIO"),
   [switch]$NoLaunch
 )
@@ -25,8 +25,8 @@ function Assert-SafeInstallDir {
   return $fullPath
 }
 
-if ($Repo -eq "YOUR_GITHUB_USERNAME/ISTUDIO" -or [string]::IsNullOrWhiteSpace($Repo)) {
-  throw "The installer repo is not configured. Replace YOUR_GITHUB_USERNAME/ISTUDIO with your GitHub owner/repo before publishing."
+if ([string]::IsNullOrWhiteSpace($Repo)) {
+  throw "The installer repo is not configured."
 }
 
 $InstallDir = Assert-SafeInstallDir -Path $InstallDir
