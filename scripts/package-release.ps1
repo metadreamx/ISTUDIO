@@ -57,8 +57,10 @@ function Assert-ReleasePackage {
 
   $requiredPaths = @(
     "ISTUDIO.bat",
+    "Install-ISTUDIO.bat",
     "package.json",
     "server.ts",
+    "dist-server\server.js",
     "dist\index.html",
     "scripts\ISTUDIO-Launcher.ps1",
     "node_modules"
@@ -97,6 +99,9 @@ try {
   if (-not (Test-Path (Join-Path $root "dist\index.html"))) {
     throw "dist/index.html is missing. Run npm run build before packaging."
   }
+  if (-not (Test-Path (Join-Path $root "dist-server\server.js"))) {
+    throw "dist-server/server.js is missing. Run npm run build before packaging."
+  }
   if (-not (Test-Path (Join-Path $root "node_modules"))) {
     throw "node_modules is missing. Run npm ci before packaging."
   }
@@ -113,6 +118,7 @@ try {
     "index.html",
     "index.tsx",
     "ISTUDIO.bat",
+    "Install-ISTUDIO.bat",
     "manifest.json",
     "metadata.json",
     "package.json",
@@ -127,6 +133,7 @@ try {
     "components",
     "data",
     "dist",
+    "dist-server",
     "docs",
     "installers",
     "public",

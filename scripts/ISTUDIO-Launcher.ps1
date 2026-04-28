@@ -192,6 +192,7 @@ function Assert-IStudioPackage {
     "ISTUDIO.bat",
     "package.json",
     "server.ts",
+    "dist-server\server.js",
     "dist\index.html",
     "scripts\ISTUDIO-Launcher.ps1",
     "node_modules",
@@ -243,6 +244,7 @@ function Assert-IStudioPackage {
     "ISTUDIO.bat",
     "package.json",
     "server.ts",
+    "dist-server\server.js",
     "dist\index.html",
     "scripts\ISTUDIO-Launcher.ps1",
     "node_modules",
@@ -422,6 +424,7 @@ function Assert-InstalledReleasePackage {
     "runtime\node\node.exe",
     "runtime\node\npm.cmd",
     "node_modules",
+    "dist-server\server.js",
     "dist\index.html",
     "scripts\ISTUDIO-Launcher.ps1",
     "server.ts",
@@ -481,6 +484,18 @@ function Ensure-AppReady {
     & $npm run build
     if ($LASTEXITCODE -ne 0) {
       throw "Production build failed."
+    }
+  }
+
+  if (-not (Test-Path (Join-Path $AppDir "dist-server\server.js"))) {
+    if ($isReleaseInstall) {
+      throw "This ISTUDIO install is missing the production server build. Run Install-ISTUDIO.bat again to repair the app."
+    }
+    Write-Host ""
+    Write-Host "Building ISTUDIO server for production..." -ForegroundColor Cyan
+    & $npm run build:server
+    if ($LASTEXITCODE -ne 0) {
+      throw "Production server build failed."
     }
   }
 

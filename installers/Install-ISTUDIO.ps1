@@ -48,6 +48,7 @@ function Assert-IStudioPackage {
     "ISTUDIO.bat",
     "package.json",
     "server.ts",
+    "dist-server\server.js",
     "dist\index.html",
     "scripts\ISTUDIO-Launcher.ps1",
     "node_modules",

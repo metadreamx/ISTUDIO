@@ -11,6 +11,7 @@ node_modules
 projects
 dist
 dist-ssr
+dist-server
 release
 runtime
 .chrome-qa*
