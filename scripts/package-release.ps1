@@ -56,46 +56,6 @@ function Write-ReleaseInstaller {
   Set-Content -LiteralPath $Destination -Value $content -Encoding ascii
 }
 
-function Find-CSharpCompiler {
-  $candidates = @(
-    (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
-    (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe")
-  )
-
-  foreach ($candidate in $candidates) {
-    if (Test-Path $candidate) {
-      return $candidate
-    }
-  }
-
-  $command = Get-Command csc.exe -ErrorAction SilentlyContinue
-  if ($command) {
-    return $command.Source
-  }
-
-  throw "Could not find csc.exe to build ISTUDIO.exe."
-}
-
-function Build-ExeLauncher {
-  param(
-    [string]$Source,
-    [string]$Output
-  )
-
-  $compiler = Find-CSharpCompiler
-  if (Test-Path $Output) {
-    Remove-Item -LiteralPath $Output -Force
-  }
-
-  & $compiler /nologo /target:exe /platform:anycpu "/out:$Output" $Source
-  if ($LASTEXITCODE -ne 0) {
-    throw "Failed to build ISTUDIO.exe."
-  }
-  if (-not (Test-Path $Output) -or (Get-Item $Output).Length -le 0) {
-    throw "ISTUDIO.exe was not created correctly."
-  }
-}
-
 function Assert-ReleasePackage {
   param(
     [string]$PackageRoot,
@@ -104,7 +64,6 @@ function Assert-ReleasePackage {
 
   $requiredPaths = @(
     "LAUNCH ISTUDIO.bat",
-    "ISTUDIO.exe",
     "package.json",
     "dist-server\server.js",
     "dist\index.html",
@@ -133,7 +92,6 @@ $releaseDir = Join-Path $root "release"
 $stageRoot = Join-Path $releaseDir "stage"
 $appStage = Join-Path $stageRoot "ISTUDIO"
 $zipPath = Join-Path $releaseDir "ISTUDIO-windows.zip"
-$exePath = Join-Path $releaseDir "ISTUDIO.exe"
 $batPath = Join-Path $releaseDir "LAUNCH ISTUDIO.bat"
 
 Push-Location $root
@@ -158,7 +116,6 @@ try {
     Remove-Item -LiteralPath $stageRoot -Recurse -Force
   }
   New-Item -ItemType Directory -Force -Path $appStage, $releaseDir | Out-Null
-  Build-ExeLauncher -Source (Join-Path $root "launcher\ISTUDIO.cs") -Output $exePath
 
   $items = @(
     ".env.example",
@@ -176,7 +133,6 @@ try {
   foreach ($item in $items) {
     Copy-RequiredItem -Name $item -Root $root -Destination $appStage
   }
-  Copy-Item -LiteralPath $exePath -Destination $appStage -Force
 
   New-Item -ItemType Directory -Force -Path (Join-Path $appStage "projects") | Out-Null
 
@@ -235,12 +191,12 @@ try {
   Remove-Item -LiteralPath (Join-Path $releaseDir "Install-ISTUDIO.bat") -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $releaseDir "Install-ISTUDIO.ps1") -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $releaseDir "ISTUDIO.bat") -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $releaseDir "ISTUDIO.exe") -Force -ErrorAction SilentlyContinue
 
   Write-Host ""
   Write-Host "Release package created:" -ForegroundColor Green
   Write-Host "  $zipPath"
   Write-Host ("  " + $batPath)
-  Write-Host ("  " + $exePath)
 } finally {
   Pop-Location
 }

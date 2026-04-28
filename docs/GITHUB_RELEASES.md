@@ -7,10 +7,9 @@ ISTUDIO ships as a simple Windows launcher plus a self-contained app package. Us
 Each GitHub Release should expose only:
 
 - `LAUNCH ISTUDIO.bat`
-- `ISTUDIO.exe`
 - `ISTUDIO-windows.zip`
 
-Tell users to download `ISTUDIO.exe` first. If Windows blocks the EXE, they can use `LAUNCH ISTUDIO.bat`. Both launchers install or repair ISTUDIO automatically from the latest release.
+Tell users to download `LAUNCH ISTUDIO.bat`. That single launcher installs, repairs, launches, and updates ISTUDIO automatically from the latest release.
 
 Users should not use GitHub's **Code > Download ZIP** button because source zips do not include ignored runtime folders such as `runtime/`, `node_modules/`, `dist/`, or `dist-server/`.
 
@@ -25,7 +24,6 @@ Users should not use GitHub's **Code > Download ZIP** button because source zips
 - `dist-server/server.js`
 - `scripts/ISTUDIO-Launcher.ps1`
 - `LAUNCH ISTUDIO.bat`
-- `ISTUDIO.exe`
 
 The package script and installer both validate these files before shipping or installing.
 
