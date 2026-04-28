@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$Repo = $(if ($env:ISTUDIO_REPO) { $env:ISTUDIO_REPO } else { "metadreamx/ISTUDIO" }),
-  [int]$Port = 4217
+  [int]$Port = 4217,
+  [switch]$AutoLaunch
 )
 
 $ErrorActionPreference = "Stop"
@@ -538,6 +539,11 @@ function Open-ProjectsFolder {
 }
 
 $script:UpdateState = Get-UpdateState -Quiet
+
+if ($AutoLaunch) {
+  Launch-IStudio
+  exit $LASTEXITCODE
+}
 
 while ($true) {
   Write-LauncherHeader $script:UpdateState

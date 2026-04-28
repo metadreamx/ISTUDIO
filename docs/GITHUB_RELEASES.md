@@ -9,7 +9,7 @@ Each GitHub Release should expose only:
 - `LAUNCH ISTUDIO.bat`
 - `ISTUDIO-windows.zip`
 
-Tell users to download `LAUNCH ISTUDIO.bat`. That single launcher installs, repairs, launches, and updates ISTUDIO automatically from the latest release.
+Tell users to download `LAUNCH ISTUDIO.bat`. That single launcher installs or repairs ISTUDIO, then starts the app in one run. Users can open the maintenance menu with `LAUNCH ISTUDIO.bat menu`.
 
 Users should not use GitHub's **Code > Download ZIP** button because source zips do not include ignored runtime folders such as `runtime/`, `node_modules/`, `dist/`, or `dist-server/`.
 
