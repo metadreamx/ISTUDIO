@@ -1,6 +1,6 @@
 # Shipping ISTUDIO With GitHub Releases
 
-ISTUDIO is set up to ship as a Windows release package with a one-click installer.
+ISTUDIO is set up to ship as a self-contained Windows release package with a one-click installer. Users do not need to install Node.js, npm, or app dependencies manually.
 
 ## First-Time GitHub Setup
 
@@ -21,6 +21,8 @@ The workflow creates a GitHub Release with:
 - `ISTUDIO-windows.zip`
 
 Share `Install-ISTUDIO.bat` with users. It downloads the latest release, installs ISTUDIO to `%LOCALAPPDATA%\ISTUDIO`, creates a desktop launcher, and opens the ISTUDIO Launcher menu.
+
+The `ISTUDIO-windows.zip` package must contain `runtime/node/node.exe`, `node_modules`, `dist/index.html`, and `ISTUDIO.bat`. The packager and installer both validate these files before shipping or installing.
 
 ## Updates
 

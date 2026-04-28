@@ -49,6 +49,37 @@ function Write-ReleaseInstaller {
   Set-Content -LiteralPath $Destination -Value $content -Encoding ascii
 }
 
+function Assert-ReleasePackage {
+  param(
+    [string]$PackageRoot,
+    [bool]$RequirePortableNode
+  )
+
+  $requiredPaths = @(
+    "ISTUDIO.bat",
+    "package.json",
+    "server.ts",
+    "dist\index.html",
+    "scripts\ISTUDIO-Launcher.ps1",
+    "node_modules"
+  )
+
+  if ($RequirePortableNode) {
+    $requiredPaths += @(
+      "runtime\node\node.exe",
+      "runtime\node\npm.cmd"
+    )
+  }
+
+  $missing = $requiredPaths | Where-Object {
+    -not (Test-Path (Join-Path $PackageRoot $_))
+  }
+
+  if ($missing.Count -gt 0) {
+    throw "Release package is incomplete. Missing: $($missing -join ', ')"
+  }
+}
+
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $releaseDir = Join-Path $root "release"
 $stageRoot = Join-Path $releaseDir "stage"
@@ -141,6 +172,8 @@ try {
     $global:LASTEXITCODE = 0
   }
 
+  Assert-ReleasePackage -PackageRoot $appStage -RequirePortableNode:(-not $SkipPortableNode)
+
   if (Test-Path $zipPath) {
     Remove-Item -LiteralPath $zipPath -Force
   }
@@ -155,6 +188,10 @@ try {
     Compress-Archive -Path $appStage -DestinationPath $zipPath -Force
   } finally {
     Pop-Location
+  }
+
+  if (-not (Test-Path $zipPath) -or (Get-Item $zipPath).Length -le 0) {
+    throw "Release zip was not created correctly."
   }
 
   Write-ReleaseInstaller -Source (Join-Path $root "installers\Install-ISTUDIO.bat") -Destination (Join-Path $releaseDir "Install-ISTUDIO.bat") -Repo $Repo

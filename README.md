@@ -19,13 +19,13 @@ The workflow is simple: choose a reference image, import your target photos, des
 2. Download `Install-ISTUDIO.bat`.
 3. Double-click the installer.
 
-The installer downloads the newest ISTUDIO package, installs it to:
+The installer downloads the newest self-contained ISTUDIO package, installs it to:
 
 ```text
 %LOCALAPPDATA%\ISTUDIO
 ```
 
-It also creates a desktop shortcut named `ISTUDIO`.
+It includes the Node.js runtime, app dependencies, and production build. Users do not need to install Node.js, npm, or developer tools. It also creates a desktop shortcut named `ISTUDIO`.
 
 ## Launch and Update
 

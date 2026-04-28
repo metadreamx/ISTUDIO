@@ -25,6 +25,70 @@ function Assert-SafeInstallDir {
   return $fullPath
 }
 
+function Find-PackageRoot {
+  param([string]$ExtractPath)
+
+  $expected = Join-Path $ExtractPath "ISTUDIO"
+  if (Test-Path $expected) {
+    return $expected
+  }
+
+  $directories = Get-ChildItem -LiteralPath $ExtractPath -Directory
+  if ($directories.Count -eq 1) {
+    return $directories[0].FullName
+  }
+
+  return $ExtractPath
+}
+
+function Assert-IStudioPackage {
+  param([string]$PackageRoot)
+
+  $requiredPaths = @(
+    "ISTUDIO.bat",
+    "package.json",
+    "server.ts",
+    "dist\index.html",
+    "scripts\ISTUDIO-Launcher.ps1",
+    "node_modules",
+    "runtime\node\node.exe",
+    "runtime\node\npm.cmd"
+  )
+
+  $missing = $requiredPaths | Where-Object {
+    -not (Test-Path (Join-Path $PackageRoot $_))
+  }
+
+  if ($missing.Count -gt 0) {
+    throw "The downloaded ISTUDIO package is incomplete. Missing: $($missing -join ', ')"
+  }
+}
+
+function Get-LatestRelease {
+  try {
+    return Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers $headers -TimeoutSec 15
+  } catch {
+    $statusCode = $null
+    if ($_.Exception.Response) {
+      $statusCode = [int]$_.Exception.Response.StatusCode
+    }
+
+    if ($statusCode -eq 404) {
+      try {
+        Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo" -Headers $headers -TimeoutSec 15 | Out-Null
+        throw "No GitHub Release has been published for ISTUDIO yet. Push a version tag, wait for GitHub Actions to finish, then run this installer again."
+      } catch {
+        if ($_.Exception.Message -like "No GitHub Release*") {
+          throw
+        }
+        throw "GitHub could not find $Repo. Make sure the repository is public and the installer is pointed at the right repo."
+      }
+    }
+
+    throw "Could not reach GitHub releases for $Repo. Check your internet connection and try again. $($_.Exception.Message)"
+  }
+}
+
 if ([string]::IsNullOrWhiteSpace($Repo)) {
   throw "The installer repo is not configured."
 }
@@ -37,7 +101,7 @@ $extractPath = Join-Path $tempRoot "extract"
 
 try {
   Write-Step "Finding the latest ISTUDIO release"
-  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers $headers
+  $release = Get-LatestRelease
   $asset = $release.assets | Where-Object { $_.name -eq "ISTUDIO-windows.zip" } | Select-Object -First 1
   if (-not $asset) {
     $asset = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
@@ -53,21 +117,14 @@ try {
 
   Write-Step "Preparing the update"
   Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-  $packageRoot = Join-Path $extractPath "ISTUDIO"
-  if (-not (Test-Path $packageRoot)) {
-    $directories = Get-ChildItem -LiteralPath $extractPath -Directory
-    if ($directories.Count -eq 1) {
-      $packageRoot = $directories[0].FullName
-    } else {
-      $packageRoot = $extractPath
-    }
-  }
+  $packageRoot = Find-PackageRoot -ExtractPath $extractPath
+  Assert-IStudioPackage -PackageRoot $packageRoot
 
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
   New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir "projects") | Out-Null
 
   Write-Step "Installing ISTUDIO"
-  $preserve = @("projects", ".env.local")
+  $preserve = @("projects", ".env.local", ".istudio-release")
   Get-ChildItem -LiteralPath $InstallDir -Force |
     Where-Object { $preserve -notcontains $_.Name } |
     Remove-Item -Recurse -Force

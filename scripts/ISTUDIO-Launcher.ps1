@@ -185,6 +185,29 @@ function Find-PackageRoot {
   return $ExtractPath
 }
 
+function Assert-IStudioPackage {
+  param([string]$PackageRoot)
+
+  $requiredPaths = @(
+    "ISTUDIO.bat",
+    "package.json",
+    "server.ts",
+    "dist\index.html",
+    "scripts\ISTUDIO-Launcher.ps1",
+    "node_modules",
+    "runtime\node\node.exe",
+    "runtime\node\npm.cmd"
+  )
+
+  $missing = $requiredPaths | Where-Object {
+    -not (Test-Path (Join-Path $PackageRoot $_))
+  }
+
+  if ($missing.Count -gt 0) {
+    throw "The downloaded ISTUDIO package is incomplete. Missing: $($missing -join ', ')"
+  }
+}
+
 function Quote-Argument {
   param([string]$Value)
   return '"' + ($Value -replace '"', '\"') + '"'
@@ -213,18 +236,39 @@ function Write-Step {
   Write-Host "==> $Message" -ForegroundColor Cyan
 }
 
+function Assert-IStudioPackage {
+  param([string]$PackageRoot)
+
+  $requiredPaths = @(
+    "ISTUDIO.bat",
+    "package.json",
+    "server.ts",
+    "dist\index.html",
+    "scripts\ISTUDIO-Launcher.ps1",
+    "node_modules",
+    "runtime\node\node.exe",
+    "runtime\node\npm.cmd"
+  )
+
+  $missing = $requiredPaths | Where-Object {
+    -not (Test-Path (Join-Path $PackageRoot $_))
+  }
+
+  if ($missing.Count -gt 0) {
+    throw "The downloaded ISTUDIO package is incomplete. Missing: $($missing -join ', ')"
+  }
+}
+
 try {
   Start-Sleep -Seconds 2
   Write-Step "Applying ISTUDIO update $TagName"
 
-  if (-not (Test-Path $PackageRoot)) {
-    throw "Downloaded package folder was not found."
-  }
+  Assert-IStudioPackage -PackageRoot $PackageRoot
 
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
   New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir "projects") | Out-Null
 
-  $preserve = @("projects", ".env.local")
+  $preserve = @("projects", ".env.local", ".istudio-release")
   Get-ChildItem -LiteralPath $InstallDir -Force |
     Where-Object { $preserve -notcontains $_.Name } |
     Remove-Item -Recurse -Force
@@ -288,6 +332,7 @@ function Install-Update {
   Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
 
   $packageRoot = Find-PackageRoot -ExtractPath $extractPath
+  Assert-IStudioPackage -PackageRoot $packageRoot
   Start-UpdateApply -PackageRoot $packageRoot -TagName ([string]$Release.tag_name) -TempRoot $tempRoot
 
   Write-Host ""
@@ -352,12 +397,15 @@ function Check-ForUpdates {
 function Add-PortableNodeToPath {
   $nodeDir = Join-Path $AppDir "runtime\node"
   if (Test-Path (Join-Path $nodeDir "node.exe")) {
-    $env:PATH = "$nodeDir;$env:PATH"
+    $npmBin = Join-Path $nodeDir "node_modules\npm\bin"
+    $env:PATH = "$nodeDir;$npmBin;$env:PATH"
+    return $true
   }
+  return $false
 }
 
 function Get-NpmCommand {
-  Add-PortableNodeToPath
+  $null = Add-PortableNodeToPath
   $npm = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
   if (-not $npm) {
     throw "npm was not found. Install Node.js 22 or install ISTUDIO from the release installer."
@@ -365,20 +413,57 @@ function Get-NpmCommand {
   return $npm.Source
 }
 
-function Ensure-AppReady {
-  $node = Get-Command "node.exe" -ErrorAction SilentlyContinue
-  if (-not $node) {
-    Add-PortableNodeToPath
-    $node = Get-Command "node.exe" -ErrorAction SilentlyContinue
+function Test-ReleaseInstall {
+  return (Test-Path (Join-Path $AppDir ".istudio-release")) -or (Test-Path (Join-Path $AppDir "runtime"))
+}
+
+function Assert-InstalledReleasePackage {
+  $requiredPaths = @(
+    "runtime\node\node.exe",
+    "runtime\node\npm.cmd",
+    "node_modules",
+    "dist\index.html",
+    "scripts\ISTUDIO-Launcher.ps1",
+    "server.ts",
+    "package.json"
+  )
+
+  $missing = $requiredPaths | Where-Object {
+    -not (Test-Path (Join-Path $AppDir $_))
   }
 
+  if ($missing.Count -gt 0) {
+    throw "This ISTUDIO install is incomplete. Missing: $($missing -join ', '). Run Install-ISTUDIO.bat again to repair the app."
+  }
+}
+
+function Ensure-AppReady {
+  $hasPortableNode = Add-PortableNodeToPath
+  $isReleaseInstall = Test-ReleaseInstall
+
+  if ($isReleaseInstall) {
+    Assert-InstalledReleasePackage
+  }
+
+  $node = Get-Command "node.exe" -ErrorAction SilentlyContinue
+
   if (-not $node) {
-    throw "Node.js was not found. Install Node.js 22 or install ISTUDIO from the release installer."
+    if ($isReleaseInstall) {
+      throw "This ISTUDIO install is missing the bundled Node.js runtime. Run Install-ISTUDIO.bat again to repair the app."
+    }
+    throw "Node.js was not found. Install Node.js 22 for development, or install ISTUDIO from the release installer."
   }
 
   $npm = Get-NpmCommand
 
+  if ($isReleaseInstall -and -not $hasPortableNode) {
+    throw "This ISTUDIO install is missing the bundled Node.js runtime. Run Install-ISTUDIO.bat again to repair the app."
+  }
+
   if (-not (Test-Path (Join-Path $AppDir "node_modules"))) {
+    if ($isReleaseInstall) {
+      throw "This ISTUDIO install is missing bundled dependencies. Run Install-ISTUDIO.bat again to repair the app."
+    }
     Write-Host ""
     Write-Host "Installing ISTUDIO dependencies..." -ForegroundColor Cyan
     & $npm install
@@ -388,6 +473,9 @@ function Ensure-AppReady {
   }
 
   if (-not (Test-Path (Join-Path $AppDir "dist\index.html"))) {
+    if ($isReleaseInstall) {
+      throw "This ISTUDIO install is missing the production build. Run Install-ISTUDIO.bat again to repair the app."
+    }
     Write-Host ""
     Write-Host "Building ISTUDIO for production..." -ForegroundColor Cyan
     & $npm run build
