@@ -215,6 +215,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   );
 
   const totalOutputs = projects.reduce((sum, project) => sum + (project.generatedImages?.length || 0), 0);
+  const canvasProjects = projects.filter((project) => Array.isArray(project.state?.canvas?.documents) && project.state.canvas.documents.length > 0);
   const featuredProject = useMemo(() => {
     if (sortedProjects.length === 0) return null;
     const previousProjects = sortedProjects.length > 1 ? sortedProjects.slice(1) : sortedProjects;
@@ -356,6 +357,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       <Palette className="h-3.5 w-3.5 text-[var(--color-accent)]" />
                       Reference Edit
                     </button>
+                    <button type="button" onClick={() => onNavigate('canvas')} className="studio-chip inline-flex items-center gap-2 rounded-[12px] px-4 py-2 text-xs font-extrabold">
+                      <Layers className="h-3.5 w-3.5 text-[var(--color-accent-secondary)]" />
+                      Canvas
+                    </button>
                     <button type="button" onClick={onOpenProjectsFolder} disabled={storageInfo?.mode !== 'folder'} className="studio-chip inline-flex items-center gap-2 rounded-[12px] px-4 py-2 text-xs font-extrabold disabled:opacity-40">
                       <FolderOpen className="h-3.5 w-3.5 text-[var(--color-accent-tertiary)]" />
                       Projects folder
@@ -377,14 +382,56 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </section>
 
         <section className="grid gap-4 sm:grid-cols-3">
-          <StatCard label="Reference projects" value={String(projects.length)} icon={<Layers className="h-4 w-4" />} />
+          <StatCard label="Local projects" value={String(projects.length)} icon={<Layers className="h-4 w-4" />} />
           <StatCard label="Finished edits" value={String(totalOutputs)} icon={<Images className="h-4 w-4" />} accent="var(--color-accent-secondary)" />
           <StatCard
-            label={hasUnsavedChanges || imageTransfer ? 'Session activity' : 'Workspace status'}
-            value={hasUnsavedChanges || imageTransfer ? 'Live' : 'Ready'}
+            label="Canvas designs"
+            value={String(canvasProjects.length)}
             icon={<CheckCircle2 className="h-4 w-4" />}
             accent="var(--color-accent-tertiary)"
           />
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setIsCreateModalOpen(true)}
+            disabled={!canCreateProjects}
+            className="group studio-panel-glow rounded-2xl premium-panel p-5 text-left disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[rgba(var(--color-accent-rgb),0.12)] text-[var(--color-accent)]">
+                  <Palette className="h-5 w-5" />
+                </span>
+                <h2 className="mt-5 text-xl font-black text-[var(--color-text)]">Reference Edit</h2>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-text-muted)]">
+                  Transfer the lighting, background, mood, color, and selected visual elements from one photo into another.
+                </p>
+              </div>
+              <ArrowRight className="mt-2 h-5 w-5 text-[var(--color-accent)] transition-transform group-hover:translate-x-1" />
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigate('canvas')}
+            disabled={!canCreateProjects}
+            className="group studio-panel-glow rounded-2xl premium-panel p-5 text-left disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-sky-400/12 text-[var(--color-accent-secondary)]">
+                  <Layers className="h-5 w-5" />
+                </span>
+                <h2 className="mt-5 text-xl font-black text-[var(--color-text)]">Canvas</h2>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-text-muted)]">
+                  Create single-page campaign layouts with editable image, text, shape, brush, template, and AI result layers.
+                </p>
+              </div>
+              <ArrowRight className="mt-2 h-5 w-5 text-[var(--color-accent-secondary)] transition-transform group-hover:translate-x-1" />
+            </div>
+          </button>
         </section>
 
         <ReferenceTemplateGallery onSelect={onSelectReferenceTemplate} />

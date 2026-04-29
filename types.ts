@@ -1,7 +1,7 @@
 
 // --- General App Types ---
 
-export type AppView = 'dashboard' | 'style-transfer';
+export type AppView = 'dashboard' | 'style-transfer' | 'canvas';
 
 export interface ImageState {
   fileName: string | null;
@@ -22,6 +22,110 @@ export interface Project {
   lastModified: number;
   state: any; // Stores the full project state
   generatedImages: string[]; // Added this
+}
+
+// --- Canvas Tool ---
+
+export type CanvasTool = 'select' | 'image' | 'text' | 'shape' | 'brush' | 'hand';
+export type CanvasPanel = 'templates' | 'assets' | 'layers' | 'properties' | 'ai' | 'history';
+export type CanvasExportFormat = 'png' | 'jpeg' | 'webp';
+export type CanvasLayerType = 'image' | 'text' | 'shape' | 'brush' | 'group' | 'mask' | 'adjustment' | 'reference' | 'ai-result';
+
+export interface CanvasAsset {
+  id: string;
+  name: string;
+  image: ImageState;
+  createdAt: number;
+}
+
+export interface CanvasExport {
+  id: string;
+  name: string;
+  dataUrl: string;
+  format: CanvasExportFormat;
+  width: number;
+  height: number;
+  createdAt: number;
+}
+
+export interface CanvasLayerBase {
+  id: string;
+  type: CanvasLayerType;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
+  blendMode?: GlobalCompositeOperation;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+}
+
+export interface CanvasImageLayer extends CanvasLayerBase {
+  type: 'image' | 'reference' | 'ai-result';
+  source: ImageState;
+}
+
+export interface CanvasTextLayer extends CanvasLayerBase {
+  type: 'text';
+  text: string;
+  fontSize: number;
+  fontFamily: string;
+  fontStyle: 'normal' | 'bold' | 'italic' | 'bold italic';
+  fill: string;
+  align: 'left' | 'center' | 'right';
+  lineHeight: number;
+}
+
+export interface CanvasShapeLayer extends CanvasLayerBase {
+  type: 'shape';
+  shape: 'rect' | 'ellipse';
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+  cornerRadius?: number;
+}
+
+export interface CanvasBrushLayer extends CanvasLayerBase {
+  type: 'brush' | 'mask';
+  points: number[];
+  stroke: string;
+  strokeWidth: number;
+  tension: number;
+  tool?: 'paint' | 'erase' | 'mask';
+}
+
+export type CanvasLayer = CanvasImageLayer | CanvasTextLayer | CanvasShapeLayer | CanvasBrushLayer;
+
+export interface CanvasDocument {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  background: string;
+  layers: CanvasLayer[];
+  assets: CanvasAsset[];
+  exports: CanvasExport[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CanvasProjectState {
+  activeDocumentId: string | null;
+  documents: CanvasDocument[];
+}
+
+export interface CanvasTemplate {
+  id: string;
+  title: string;
+  category: string;
+  description: string;
+  width: number;
+  height: number;
+  background: string;
+  layers: CanvasLayer[];
 }
 
 export interface ReferenceTemplate {

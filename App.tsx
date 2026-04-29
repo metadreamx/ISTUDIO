@@ -7,10 +7,12 @@ import { Logo, SpinnerIcon } from '@/components/icons';
 import { Tooltip } from '@/components/Tooltip';
 import { StyleTransferView } from '@/components/StyleTransferView';
 import { DashboardView } from '@/components/DashboardView';
+import { CanvasView } from '@/components/CanvasView';
 import { ApiKeyModal } from '@/components/ApiKeyModal';
 import { 
   LayoutDashboardIcon, 
   PaletteIcon, 
+  LayersIcon,
   SettingsIcon, 
   HelpCircleIcon,
   XIcon,
@@ -341,7 +343,9 @@ const App: React.FC = () => {
   const handleReopen = (project: Project) => {
     console.log("Reopening project:", project.id);
     setCurrentProject(project);
-    setActiveView('style-transfer');
+    const hasCanvasDocument = Array.isArray(project.state?.canvas?.documents) && project.state.canvas.documents.length > 0;
+    const hasReferenceEditState = Boolean(project.state?.referenceImage || project.state?.targetImages?.length);
+    setActiveView(hasCanvasDocument && !hasReferenceEditState ? 'canvas' : 'style-transfer');
   };
   
   const handleDeleteProject = useCallback(async (id: string) => {
@@ -448,6 +452,14 @@ const App: React.FC = () => {
               onReferenceTemplateConsumed={() => setPendingReferenceTemplate(null)}
             />
           )}
+          {activeView === 'canvas' && (
+            <CanvasView
+              project={currentProject}
+              onUpdateProject={handleUpdateProject}
+              onCreateProject={(name, initialState) => createProject(name, 'canvas', initialState)}
+              canCreateProjects={Boolean(projectStorageInfo)}
+            />
+          )}
         </motion.div>
       </AnimatePresence>
     );
@@ -468,6 +480,7 @@ const App: React.FC = () => {
         <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar">
           <NavButton view="dashboard" label="Explore" icon={<LayoutDashboardIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
           <NavButton view="style-transfer" label="Reference Edit" icon={<PaletteIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} badge="Pro" />
+          <NavButton view="canvas" label="Canvas" icon={<LayersIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
         </nav>
 
         <div className="flex shrink-0 items-center gap-2">

@@ -80,6 +80,12 @@ function assetBucketForPath(segments: string[]): string {
     if (segments.at(-1) === 'target') return 'targets';
     if (segments.at(-1) === 'reference') return 'reference';
   }
+  if (segments.includes('canvas')) {
+    if (segments.includes('exports') || segments.at(-1) === 'dataUrl') return 'canvas/exports';
+    if (segments.includes('mask') || segments.includes('masks')) return 'canvas/masks';
+    if (segments.includes('thumbnail') || segments.includes('thumbnails')) return 'canvas/thumbnails';
+    return 'canvas/assets';
+  }
   if (segments.includes('imageEditor')) {
     if (segments.includes('exports')) return 'editor/exports';
     if (segments.includes('mask') || segments.includes('masks')) return 'editor/masks';
@@ -127,6 +133,11 @@ async function ensureProjectAssetDirs(projectDir: string) {
     fs.mkdir(path.join(projectDir, 'editor', 'exports'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'editor', 'masks'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'editor', 'assets'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'canvas', 'documents'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'canvas', 'assets'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'canvas', 'masks'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'canvas', 'exports'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'canvas', 'thumbnails'), { recursive: true }),
   ]);
 }
 
