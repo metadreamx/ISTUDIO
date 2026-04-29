@@ -22,7 +22,7 @@ The app will ask for the key when it is needed. The key stays on the user's comp
 ## Use ISTUDIO
 
 1. Open the desktop shortcut or `LAUNCH ISTUDIO.bat` inside the installed ISTUDIO folder.
-2. ISTUDIO starts automatically.
+2. The launcher checks for updates automatically, applies a newer release if one is available, then starts ISTUDIO.
 3. Add your Google API key when prompted.
 4. Import a reference image that contains the lighting, mood, style, or scene DNA you want.
 5. Add target photos.
@@ -53,11 +53,12 @@ Each project gets its own folder with the reference image, target photos, genera
 ## Updates
 
 ISTUDIO updates are published through GitHub Releases.
+The launcher checks for updates every time ISTUDIO starts. If the computer is offline or GitHub is unavailable, ISTUDIO continues opening the installed version.
 
 ```powershell
 .\LAUNCH-ISTUDIO.bat menu
 ```
 
-The maintenance menu can check for updates and open the local projects folder. Releases show the installer BAT plus GitHub's source-code downloads:
+The maintenance menu can also check for updates manually and open the local projects folder. Releases show the installer BAT plus GitHub's source-code downloads:
 
 - `LAUNCH-ISTUDIO.bat`

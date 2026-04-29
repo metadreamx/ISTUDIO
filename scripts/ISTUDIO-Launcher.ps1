@@ -397,7 +397,10 @@ try {
 }
 
 function Install-Update {
-  param([object]$Release)
+  param(
+    [object]$Release,
+    [switch]$Automatic
+  )
 
   $asset = Get-ReleaseZipAsset -Release $Release
   $assetMode = "zip"
@@ -408,7 +411,9 @@ function Install-Update {
   if (-not $asset) {
     Write-Host "No ISTUDIO installer was found on the latest release." -ForegroundColor Red
     Write-Host "Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
-    Pause-Launcher
+    if (-not $Automatic) {
+      Pause-Launcher
+    }
     return
   }
 
@@ -452,6 +457,48 @@ function Install-Update {
     Remove-LocalSetupTemp -SetupTemp $setupTemp
     throw
   }
+}
+
+function Invoke-LaunchUpdateCheck {
+  Write-LauncherHeader $null
+  Write-Host "Checking for ISTUDIO updates..." -ForegroundColor Cyan
+  $state = Get-UpdateState -Quiet
+  $script:UpdateState = $state
+
+  if ($state.Status -eq "available") {
+    Write-Host ""
+    Write-Host ("Update available: {0}" -f $state.LatestTag) -ForegroundColor Yellow
+    Write-Host "Installing the latest ISTUDIO before launch..."
+    try {
+      Install-Update -Release $state.Release -Automatic
+    } catch {
+      Write-Host ""
+      Write-Host "Automatic update could not finish. Launching the installed version." -ForegroundColor Yellow
+      Write-Host $_.Exception.Message
+      Start-Sleep -Seconds 2
+    }
+    return
+  }
+
+  if ($state.Status -eq "current") {
+    Write-Host ""
+    Write-Host ("ISTUDIO is up to date: {0}" -f $state.LatestTag) -ForegroundColor Green
+    Start-Sleep -Milliseconds 700
+    return
+  }
+
+  Write-Host ""
+  if ($state.Status -eq "no-release") {
+    Write-Host "ISTUDIO release is not published yet. Launching the installed version." -ForegroundColor DarkYellow
+  } elseif ($state.Status -eq "repo-unavailable") {
+    Write-Host "ISTUDIO release is not available. Launching the installed version." -ForegroundColor DarkYellow
+  } else {
+    Write-Host "Update check unavailable. Launching the installed version." -ForegroundColor DarkYellow
+    if ($state.Message) {
+      Write-Host $state.Message
+    }
+  }
+  Start-Sleep -Seconds 2
 }
 
 function Check-ForUpdates {
@@ -595,7 +642,7 @@ function Open-ProjectsFolder {
 }
 
 if ($AutoLaunch) {
-  $script:UpdateState = $null
+  Invoke-LaunchUpdateCheck
   Launch-IStudio
   exit $LASTEXITCODE
 }
@@ -616,6 +663,7 @@ while ($true) {
 
   switch ($choice) {
     "1" {
+      Invoke-LaunchUpdateCheck
       Launch-IStudio
       exit $LASTEXITCODE
     }
