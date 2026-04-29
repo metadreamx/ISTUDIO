@@ -6,7 +6,7 @@ import { ImageUploader } from './ImageUploader';
 import { MainPanel } from './MainPanel';
 import { StyleChecklist } from './StyleChecklist';
 import { analyzeTargetImageDetails, editImage, detectTransferableElements, analyzeClothingImage, analyzeAccessoryImage, analyzeFaceImage, analyzeBackgroundImage, analyzeSkyImage, analyzeReferenceScene } from '../services/geminiService';
-import { SparklesIcon, XCircleIcon, CheckIcon, LockIcon, AdjustmentsHorizontalIcon, HistoryIcon, DownloadIcon } from '@/components/icons';
+import { SparklesIcon, XCircleIcon, CheckIcon, LockIcon, AdjustmentsHorizontalIcon, HistoryIcon, DownloadIcon, ChevronDownIcon } from '@/components/icons';
 
 // Utility function to get dominant color from an image
 const getDominantColor = (base64Image: string, mimeType: string): Promise<string> => {
@@ -103,6 +103,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   const [referenceImage, setReferenceImage] = useState<ImageState>(createEmptyImage());
   const [targetImages, setTargetImages] = useState<BatchImage[]>([]);
   const [generationHistory, setGenerationHistory] = useState<HistoryItem[]>([]);
+  const [isGenerationHistoryOpen, setIsGenerationHistoryOpen] = useState(false);
   const [activeImageIndex, setActiveImageIndex] = useState<number>(-1);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus>('idle');
@@ -116,6 +117,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   const [anchorImageId, setAnchorImageId] = useState<string | null>(null);
   const cancelGenerationRef = useRef(false);
   const lastAnalyzedRefBase64 = useRef<string | null>(null);
+  const generationHistoryMenuRef = useRef<HTMLDivElement | null>(null);
   
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(new Set());
@@ -197,9 +199,36 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     setSessionSeed(typeof state.sessionSeed === 'number' ? state.sessionSeed : null);
     setAnchorImageId(typeof state.anchorImageId === 'string' ? state.anchorImageId : null);
     setSelectedImageIds(new Set());
+    setIsGenerationHistoryOpen(false);
     setGenerationStatus('idle');
     setError(null);
   }, [project?.id]); // Only re-load when project ID changes
+
+  useEffect(() => {
+    if (!isGenerationHistoryOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && generationHistoryMenuRef.current?.contains(target)) {
+        return;
+      }
+      setIsGenerationHistoryOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsGenerationHistoryOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isGenerationHistoryOpen]);
 
   useEffect(() => {
     if (!referenceTemplate?.base64 || !referenceTemplate.mimeType) return;
@@ -1324,90 +1353,123 @@ Before outputting, verify:
           </section>
 
           {/* Project generation history */}
-          <section>
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="flex items-center gap-2 text-xs font-semibold text-[var(--color-text-muted)]">
-                <HistoryIcon className="h-3 w-3 text-[var(--color-accent)]" />
-                Generation History
-              </h2>
-              <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1 text-[10px] font-semibold text-[var(--color-text-muted)]">
-                {generationHistory.length}
+          <section ref={generationHistoryMenuRef} className={`relative ${isGenerationHistoryOpen ? 'z-50' : 'z-20'}`}>
+            <button
+              type="button"
+              onClick={() => setIsGenerationHistoryOpen((isOpen) => !isOpen)}
+              className="group flex w-full items-center justify-between rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 py-3 text-left transition-all hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)]"
+              aria-expanded={isGenerationHistoryOpen}
+              aria-controls="generation-history-menu"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
+                  <HistoryIcon className="h-3.5 w-3.5 text-[var(--color-accent)]" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-xs font-semibold text-[var(--color-text)]">Generation History</span>
+                  <span className="block truncate text-[11px] text-[var(--color-text-muted)]">
+                    {generationHistory.length === 0 ? 'No saved results yet' : `${generationHistory.length} project-backed result${generationHistory.length === 1 ? '' : 's'}`}
+                  </span>
+                </span>
               </span>
-            </div>
+              <span className="flex flex-shrink-0 items-center gap-2">
+                <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[10px] font-semibold text-[var(--color-text-muted)]">
+                  {generationHistory.length}
+                </span>
+                <ChevronDownIcon className={`h-4 w-4 text-[var(--color-text-muted)] transition-transform duration-200 ${isGenerationHistoryOpen ? 'rotate-180' : ''}`} />
+              </span>
+            </button>
 
-            <div className="space-y-3">
-              <p className="text-sm leading-6 text-[var(--color-text-muted)]">
-                Every saved result for this project is stored in the project folder and reloads with the edit.
-              </p>
+            <AnimatePresence>
+              {isGenerationHistoryOpen && (
+                <motion.div
+                  id="generation-history-menu"
+                  initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                  className="absolute left-0 right-0 top-full mt-3 overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl shadow-black/35"
+                >
+                  <div className="border-b border-[var(--color-border)] px-4 py-3">
+                    <p className="text-xs leading-5 text-[var(--color-text-muted)]">
+                      Saved generations reload with this project. Select one to restore it, or export directly.
+                    </p>
+                  </div>
 
-              {generationHistory.length === 0 ? (
-                <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-5 text-center">
-                  <HistoryIcon className="mx-auto mb-3 h-6 w-6 text-[var(--color-text-muted)] opacity-30" />
-                  <p className="text-xs font-semibold text-[var(--color-text-muted)]">No generations saved yet</p>
-                </div>
-              ) : (
-                <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1 custom-scrollbar">
-                  {generationHistory.map((item) => {
-                    const isActiveHistory = activeTarget?.generated === item.generated;
-                    const selectedSummary = item.settings?.selectedCategories
-                      ?.slice(0, 2)
-                      .map((category) => `${category.label} ${category.intensity}%`)
-                      .join(' / ');
+                  {generationHistory.length === 0 ? (
+                    <div className="p-5 text-center">
+                      <HistoryIcon className="mx-auto mb-3 h-6 w-6 text-[var(--color-text-muted)] opacity-30" />
+                      <p className="text-xs font-semibold text-[var(--color-text-muted)]">No generations saved yet</p>
+                    </div>
+                  ) : (
+                    <div className="max-h-[360px] space-y-2 overflow-y-auto p-2 custom-scrollbar">
+                      {generationHistory.map((item) => {
+                        const isActiveHistory = activeTarget?.generated === item.generated;
+                        const selectedSummary = item.settings?.selectedCategories
+                          ?.slice(0, 2)
+                          .map((category) => `${category.label} ${category.intensity}%`)
+                          .join(' / ');
 
-                    return (
-                      <div
-                        key={item.id}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => handleSelectGeneration(item)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            handleSelectGeneration(item);
-                          }
-                        }}
-                        className={`group grid w-full grid-cols-[72px_1fr_auto] gap-3 rounded-xl border p-2 text-left transition-all ${
-                          isActiveHistory
-                            ? 'border-[var(--color-accent)] bg-[rgba(var(--color-accent-rgb),0.08)]'
-                            : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)]'
-                        }`}
-                      >
-                        <img
-                          src={item.generated}
-                          alt="Saved generation"
-                          className="h-[72px] w-[72px] rounded-lg object-cover"
-                          loading="lazy"
-                        />
-                        <span className="min-w-0 self-center">
-                          <span className="block truncate text-xs font-semibold text-[var(--color-text)]">
-                            {item.targetFileName || item.target?.fileName || 'Saved generation'}
-                          </span>
-                          <span className="mt-1 block text-[11px] text-[var(--color-text-muted)]">
-                            {new Date(item.id).toLocaleString()}
-                          </span>
-                          {selectedSummary && (
-                            <span className="mt-1 line-clamp-2 block text-[11px] leading-4 text-[var(--color-text-muted)]">
-                              {selectedSummary}
+                        return (
+                          <div
+                            key={item.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              handleSelectGeneration(item);
+                              setIsGenerationHistoryOpen(false);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleSelectGeneration(item);
+                                setIsGenerationHistoryOpen(false);
+                              }
+                            }}
+                            className={`group grid w-full grid-cols-[64px_1fr_auto] gap-3 rounded-xl border p-2 text-left transition-all ${
+                              isActiveHistory
+                                ? 'border-[var(--color-accent)] bg-[rgba(var(--color-accent-rgb),0.08)]'
+                                : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)]'
+                            }`}
+                          >
+                            <img
+                              src={item.generated}
+                              alt="Saved generation"
+                              className="h-16 w-16 rounded-lg object-cover"
+                              loading="lazy"
+                            />
+                            <span className="min-w-0 self-center">
+                              <span className="block truncate text-xs font-semibold text-[var(--color-text)]">
+                                {item.targetFileName || item.target?.fileName || 'Saved generation'}
+                              </span>
+                              <span className="mt-1 block text-[11px] text-[var(--color-text-muted)]">
+                                {new Date(item.id).toLocaleString()}
+                              </span>
+                              {selectedSummary && (
+                                <span className="mt-1 line-clamp-2 block text-[11px] leading-4 text-[var(--color-text-muted)]">
+                                  {selectedSummary}
+                                </span>
+                              )}
                             </span>
-                          )}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleExportGeneration(item);
-                          }}
-                          className="flex h-8 w-8 items-center justify-center self-start rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] opacity-80 transition-all group-hover:opacity-100 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-                          aria-label="Export saved generation"
-                        >
-                          <DownloadIcon className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleExportGeneration(item);
+                              }}
+                              className="flex h-8 w-8 items-center justify-center self-start rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] opacity-80 transition-all group-hover:opacity-100 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+                              aria-label="Export saved generation"
+                            >
+                              <DownloadIcon className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </motion.div>
               )}
-            </div>
+            </AnimatePresence>
           </section>
 
           {/* Reference analysis section */}
