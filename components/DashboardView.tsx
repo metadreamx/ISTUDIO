@@ -41,13 +41,34 @@ const formatDate = (timestamp: number) =>
     year: 'numeric',
   });
 
+const getProjectOutputCount = (project: Project) => {
+  const historyCount = Array.isArray(project.state?.generationHistory)
+    ? project.state.generationHistory.length
+    : 0;
+  return Math.max(historyCount, project.generatedImages?.length || 0);
+};
+
+const getProjectCoverImages = (project: Project) => {
+  const coverImages = project.generatedImages?.filter(Boolean) || [];
+  if (coverImages.length > 0) return coverImages.slice(0, 4);
+
+  if (Array.isArray(project.state?.generationHistory)) {
+    return project.state.generationHistory
+      .map((item: { generated?: string }) => item.generated)
+      .filter((image: string | undefined): image is string => Boolean(image))
+      .slice(0, 4);
+  }
+
+  return [];
+};
+
 const ProjectCard: React.FC<{
   project: Project;
   onOpen: (project: Project) => void;
   onDelete: (id: string) => void;
 }> = ({ project, onOpen, onDelete }) => {
-  const imageCount = project.generatedImages?.length || 0;
-  const coverImages = project.generatedImages?.slice(0, 4) || [];
+  const imageCount = getProjectOutputCount(project);
+  const coverImages = getProjectCoverImages(project);
 
   return (
     <motion.article
@@ -214,19 +235,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     project.name.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
-  const totalOutputs = projects.reduce((sum, project) => sum + (project.generatedImages?.length || 0), 0);
+  const totalOutputs = projects.reduce((sum, project) => sum + getProjectOutputCount(project), 0);
   const canvasProjects = projects.filter((project) => Array.isArray(project.state?.canvas?.documents) && project.state.canvas.documents.length > 0);
   const featuredProject = useMemo(() => {
     if (sortedProjects.length === 0) return null;
     const previousProjects = sortedProjects.length > 1 ? sortedProjects.slice(1) : sortedProjects;
-    const projectsWithOutputs = previousProjects.filter((project) => (project.generatedImages?.length || 0) > 0);
+    const projectsWithOutputs = previousProjects.filter((project) => getProjectOutputCount(project) > 0);
     const candidates = projectsWithOutputs.length > 0 ? projectsWithOutputs : previousProjects;
     return candidates[Math.floor(Math.random() * candidates.length)];
   }, [sortedProjects]);
   const featuredImages = useMemo(() => {
-    const projectImages = featuredProject?.generatedImages?.filter(Boolean) || [];
+    const projectImages = featuredProject ? getProjectCoverImages(featuredProject) : [];
     if (projectImages.length > 0) return projectImages.slice(0, 4);
-    return sortedProjects.flatMap((project) => project.generatedImages || []).slice(0, 4);
+    return sortedProjects.flatMap(getProjectCoverImages).slice(0, 4);
   }, [featuredProject, sortedProjects]);
 
   const handleCreate = (event: React.FormEvent) => {

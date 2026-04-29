@@ -99,6 +99,19 @@ const createInitialSkyItem = (): CustomSkyItem => ({
     status: 'empty'
 });
 
+const compactHistoryImage = (image: ImageState | undefined, fallbackFileName: string | null = null): ImageState => ({
+  fileName: image?.fileName || fallbackFileName,
+  base64: null,
+  mimeType: image?.mimeType || null,
+});
+
+const compactHistoryForSave = (history: HistoryItem[], fallbackReference: ImageState): HistoryItem[] =>
+  history.map((item) => ({
+    ...item,
+    target: compactHistoryImage(item.target, item.targetFileName || null),
+    reference: compactHistoryImage(item.reference, fallbackReference.fileName),
+  }));
+
 export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, onUpdateProject, referenceTemplate, onReferenceTemplateConsumed }) => {
   const [referenceImage, setReferenceImage] = useState<ImageState>(createEmptyImage());
   const [targetImages, setTargetImages] = useState<BatchImage[]>([]);
@@ -150,14 +163,28 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   useEffect(() => {
     const state = project?.state || {};
     const nextReference = state.referenceImage || createEmptyImage();
-    const restoredTargets: BatchImage[] = Array.isArray(state.targetImages)
-      ? state.targetImages.map((img: BatchImage) => ({
-          ...img,
-          status: (img.status === 'queued' || img.status === 'processing') ? 'pending' : img.status,
-        }))
-      : [];
     const restoredHistory: HistoryItem[] = Array.isArray(state.generationHistory)
       ? state.generationHistory
+      : [];
+    const generatedByTargetId = new Map<string, string>();
+    restoredHistory.forEach((item) => {
+      if (item.targetId && item.generated && !generatedByTargetId.has(item.targetId)) {
+        generatedByTargetId.set(item.targetId, item.generated);
+      }
+    });
+    const restoredTargets: BatchImage[] = Array.isArray(state.targetImages)
+      ? state.targetImages.map((img: BatchImage) => {
+          const restoredGenerated = img.generated || generatedByTargetId.get(img.id) || null;
+          return {
+            ...img,
+            generated: restoredGenerated,
+            status: (img.status === 'queued' || img.status === 'processing')
+              ? 'pending'
+              : restoredGenerated && img.status !== 'error'
+                ? 'done'
+                : img.status,
+          };
+        })
       : [];
     const fallbackHistory: HistoryItem[] = restoredHistory.length > 0
       ? restoredHistory
@@ -248,7 +275,12 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         const generatedImages = Array.from(new Set([
             ...generationHistory.map(item => item.generated).filter((img): img is string => !!img),
             ...targetImages.map(img => img.generated).filter((img): img is string => !!img),
-        ]));
+        ])).slice(0, 4);
+        const compactTargetImages = targetImages.map((image) => ({
+            ...image,
+            generated: null,
+        }));
+        const compactGenerationHistory = compactHistoryForSave(generationHistory, referenceImage);
 
         const updatedProject: Project = {
             ...project,
@@ -257,7 +289,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
             state: {
                 ...(project.state || {}),
                 referenceImage,
-                targetImages,
+                targetImages: compactTargetImages,
                 checklist,
                 sceneBlueprint,
                 accentColor,
@@ -269,7 +301,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
                 customSkyItem,
                 sessionSeed,
                 anchorImageId,
-                generationHistory
+                generationHistory: compactGenerationHistory
             }
         };
         // Debounce or only save on specific changes to avoid excessive DB writes

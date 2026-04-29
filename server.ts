@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type ErrorRequestHandler } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
@@ -10,6 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECTS_DIR = path.resolve(process.env.ISTUDIO_PROJECTS_DIR || path.join(process.cwd(), 'projects'));
 const PROJECT_JSON = 'project.json';
+const PROJECT_PAYLOAD_LIMIT = process.env.ISTUDIO_PROJECT_PAYLOAD_LIMIT || '2gb';
 
 type StoredProject = {
   id: string;
@@ -366,7 +367,17 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(express.json({ limit: '250mb' }));
+  app.use(express.json({ limit: PROJECT_PAYLOAD_LIMIT }));
+  const jsonPayloadErrorHandler: ErrorRequestHandler = (error, _req, res, next) => {
+    if (error?.type === 'entity.too.large' || error?.status === 413) {
+      res.status(413).json({
+        error: `Project save is too large for the local server limit (${PROJECT_PAYLOAD_LIMIT}). Reduce the batch size or raise ISTUDIO_PROJECT_PAYLOAD_LIMIT.`,
+      });
+      return;
+    }
+    next(error);
+  };
+  app.use(jsonPayloadErrorHandler);
   await ensureProjectsDir();
   await migrateLegacyProjectFiles();
 

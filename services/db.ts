@@ -53,9 +53,9 @@ function promisifyTransaction(tx: IDBTransaction): Promise<void> {
     });
 }
 
-async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
+async function apiRequest<T>(url: string, init?: RequestInit, timeoutMs = 30000): Promise<T> {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 5000);
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
         const response = await fetch(url, {
             ...init,
@@ -112,7 +112,7 @@ export async function saveProject(project: Project): Promise<void> {
     await apiRequest<{ ok: boolean }>(`${PROJECTS_API}/${encodeURIComponent(project.id)}`, {
         method: 'PUT',
         body: JSON.stringify(project),
-    });
+    }, 120000);
 }
 
 export async function getProjects(): Promise<Project[]> {
