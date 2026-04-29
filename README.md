@@ -13,13 +13,20 @@ Place `LAUNCH-ISTUDIO.bat` in the folder where you want ISTUDIO installed, then 
 Users do not need to install anything else. The release package includes everything ISTUDIO needs to run.
 Setup scratch files are unpacked beside the BAT in `.istudio-setup-temp` and removed after setup.
 
+## Google API Key Required
+
+ISTUDIO uses Google Gemini for AI image editing. Each user needs to provide their own Google API key before generating or refining images.
+
+The app will ask for the key when it is needed. The key stays on the user's computer in the local ISTUDIO install folder and is not included with the download.
+
 ## Use ISTUDIO
 
 1. Open the desktop shortcut or `LAUNCH ISTUDIO.bat` inside the installed ISTUDIO folder.
 2. ISTUDIO starts automatically.
-3. Import a reference image that contains the lighting, mood, style, or scene DNA you want.
-4. Add target photos.
-5. Refine the edit and export the finished result.
+3. Add your Google API key when prompted.
+4. Import a reference image that contains the lighting, mood, style, or scene DNA you want.
+5. Add target photos.
+6. Refine the edit and export the finished result.
 
 For the maintenance menu, run:
 
