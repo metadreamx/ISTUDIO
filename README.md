@@ -2,36 +2,55 @@
 
 ![ISTUDIO reference edit workspace](docs/assets/istudio-reference-edit.jpg)
 
-ISTUDIO is a Windows-first reference-based photo editing app. It lets creators edit target photos from the visual DNA of another image for background replacement, relighting, style transfer, and fine element control.
+ISTUDIO is a Windows-first creative app for reference-based photo editing and campaign design. Use one image as the visual DNA for another, then control background replacement, relighting, style transfer, element details, and export-ready results.
+
+## What ISTUDIO Does
+
+- **Reference Edit**: edit target photos from the lighting, background, mood, color, and style DNA of a reference image.
+- **Canvas**: create single-page designs with editable image, text, shape, brush, template, and AI result layers.
+- **Local projects**: save references, targets, generations, Canvas documents, exports, and settings in project folders on your computer.
+- **Automatic updates**: the launcher checks GitHub Releases every time ISTUDIO starts.
 
 ## Download And Install
 
-[Download the one-click Windows installer](https://github.com/metadreamx/ISTUDIO/releases/latest/download/LAUNCH-ISTUDIO.bat)
+### For Windows Users
 
-Place `LAUNCH-ISTUDIO.bat` in the folder where you want ISTUDIO installed, then double-click it. The installer creates an `ISTUDIO` folder beside the BAT, installs the complete app there, and starts ISTUDIO.
+**Download this file:**
 
-Users do not need to install anything else. The release package includes everything ISTUDIO needs to run.
-Setup scratch files are unpacked beside the BAT in `.istudio-setup-temp` and removed after setup.
+[Download LAUNCH-ISTUDIO.bat](https://github.com/metadreamx/ISTUDIO/releases/latest/download/LAUNCH-ISTUDIO.bat)
+
+Then:
+
+1. Move `LAUNCH-ISTUDIO.bat` to the folder where you want ISTUDIO installed.
+   Good choices are Desktop, Documents, or an external drive.
+2. Double-click `LAUNCH-ISTUDIO.bat`.
+3. ISTUDIO creates an `ISTUDIO` folder beside the BAT file.
+4. The installer sets up the complete app and starts ISTUDIO.
+5. Keep the launcher window open while using ISTUDIO. Closing it stops the local app server.
+
+Users do not need to install Node.js, npm, or developer tools. The Windows release includes everything ISTUDIO needs to run.
+
+Do not use GitHub's green **Code > Download ZIP** button unless you are a developer. Regular users should download `LAUNCH-ISTUDIO.bat` from Releases.
 
 ## Google API Key Required
 
 ISTUDIO uses Google Gemini for AI image editing. Each user needs to provide their own Google API key before generating or refining images.
 
-The app will ask for the key when it is needed. The key stays on the user's computer in the local ISTUDIO install folder and is not included with the download.
+The app will ask for the key when it is needed. The key stays on the user's computer and is not included with the download.
 
 ## Use ISTUDIO
 
 1. Open the desktop shortcut or `LAUNCH ISTUDIO.bat` inside the installed ISTUDIO folder.
-2. The launcher checks for updates automatically, applies a newer release if one is available, then starts ISTUDIO.
-3. Add your Google API key when prompted.
-4. Import a reference image that contains the lighting, mood, style, or scene DNA you want.
-5. Add target photos.
-6. Refine the edit and export the finished result.
+2. The launcher checks for updates automatically.
+3. If a newer version is available, ISTUDIO updates first, then opens.
+4. Add your Google API key when prompted.
+5. Choose **Reference Edit** or **Canvas**.
+6. Create, save, refine, and export your work.
 
-For the maintenance menu, run:
+To open the maintenance menu, run:
 
 ```powershell
-.\LAUNCH-ISTUDIO.bat menu
+& ".\LAUNCH ISTUDIO.bat" menu
 ```
 
 The menu includes:
@@ -42,23 +61,28 @@ The menu includes:
 
 ## Project Storage
 
-Installed projects are saved inside the ISTUDIO folder beside the launcher:
+Projects are saved inside the installed ISTUDIO folder:
 
 ```text
 <folder with LAUNCH-ISTUDIO.bat>\ISTUDIO\projects
 ```
 
-Each project gets its own folder with the reference image, target photos, generated outputs, saved slider/settings state, and generation history. Project data stays on the user's computer. Updates preserve projects and `.env.local`.
+Each project gets its own folder with reference images, target photos, generated outputs, Canvas assets, exports, saved settings, and generation history. Project data stays on the user's computer.
 
 ## Updates
 
 ISTUDIO updates are published through GitHub Releases.
-The launcher checks for updates every time ISTUDIO starts. If the computer is offline or GitHub is unavailable, ISTUDIO continues opening the installed version.
+The launcher checks for updates every time ISTUDIO starts. If the computer is offline or GitHub is unavailable, ISTUDIO keeps opening the installed version.
 
-```powershell
-.\LAUNCH-ISTUDIO.bat menu
-```
+Updates preserve:
 
-The maintenance menu can also check for updates manually and open the local projects folder. Releases show the installer BAT plus GitHub's source-code downloads:
+- `projects`
+- `.env.local`
+- local API key/settings files
 
-- `LAUNCH-ISTUDIO.bat`
+## Troubleshooting
+
+- If Windows blocks the BAT file, choose **More info > Run anyway** only if you downloaded it from this official GitHub Releases page.
+- If ISTUDIO does not open, close any old ISTUDIO launcher windows and run `LAUNCH ISTUDIO.bat` again.
+- If you want to install somewhere else, move `LAUNCH-ISTUDIO.bat` to that folder before running it.
+- If update checking fails because the computer is offline, ISTUDIO will still launch the installed version.
