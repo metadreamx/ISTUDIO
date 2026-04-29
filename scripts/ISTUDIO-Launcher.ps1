@@ -35,8 +35,10 @@ function Write-LauncherHeader {
     Write-Host "Latest version    : ISTUDIO release is not available" -ForegroundColor DarkYellow
   } elseif ($UpdateState -and $UpdateState.Status -eq "unavailable") {
     Write-Host "Latest version    : update check unavailable" -ForegroundColor DarkYellow
+  } elseif ($UpdateState -and $UpdateState.Status -eq "checking") {
+    Write-Host "Latest version    : checking..." -ForegroundColor Cyan
   } else {
-    Write-Host "Latest version    : checking disabled" -ForegroundColor DarkGray
+    Write-Host "Latest version    : will check before launch" -ForegroundColor DarkGray
   }
   Write-Host ""
 }
@@ -460,7 +462,7 @@ function Install-Update {
 }
 
 function Invoke-LaunchUpdateCheck {
-  Write-LauncherHeader $null
+  Write-LauncherHeader ([pscustomobject]@{ Status = "checking" })
   Write-Host "Checking for ISTUDIO updates..." -ForegroundColor Cyan
   $state = Get-UpdateState -Quiet
   $script:UpdateState = $state
@@ -606,6 +608,10 @@ function Ensure-AppReady {
 }
 
 function Launch-IStudio {
+  if (-not $script:UpdateState) {
+    Invoke-LaunchUpdateCheck
+  }
+
   Write-LauncherHeader $script:UpdateState
   Write-Host "Starting ISTUDIO..." -ForegroundColor Cyan
 
