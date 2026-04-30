@@ -70,7 +70,7 @@ async function apiRequest<T>(url: string, init?: RequestInit, timeoutMs = 30000)
         }
         const contentType = response.headers.get('content-type') || '';
         if (!contentType.includes('application/json')) {
-            throw new Error('Project storage server is not running. Restart ISTUDIO with ISTUDIO.bat.');
+            throw new Error('Project storage server is not running. Restart ISTUDIO with LAUNCH ISTUDIO.bat.');
         }
         return await response.json() as T;
     } finally {
@@ -111,14 +111,18 @@ export async function deleteHistoryItems(ids: number[]): Promise<void> {
 export async function saveProject(project: Project): Promise<void> {
     await apiRequest<{ ok: boolean }>(`${PROJECTS_API}/${encodeURIComponent(project.id)}`, {
         method: 'PUT',
-        body: JSON.stringify(project),
+        body: JSON.stringify({ ...project, summary: undefined }),
     }, 120000);
 }
 
 export async function getProjects(): Promise<Project[]> {
-    const serverProjects = await apiRequest<Project[]>(PROJECTS_API);
+    const serverProjects = await apiRequest<Project[]>(`${PROJECTS_API}?summary=1`);
     await migrateIndexedDbProjectsToFolder(serverProjects);
-    return await apiRequest<Project[]>(PROJECTS_API);
+    return await apiRequest<Project[]>(`${PROJECTS_API}?summary=1`);
+}
+
+export async function getProject(id: string): Promise<Project> {
+    return await apiRequest<Project>(`${PROJECTS_API}/${encodeURIComponent(id)}`);
 }
 
 export async function deleteProject(id: string): Promise<void> {

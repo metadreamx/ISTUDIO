@@ -86,6 +86,13 @@ const fileToGenerativePart = (base64: string, mimeType: string) => {
     };
 };
 
+const MAX_INLINE_REQUEST_BYTES = 18 * 1024 * 1024;
+
+function estimateBase64Bytes(base64: string): number {
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
+}
+
 /**
  * Processes an uploaded image file.
  * Resizes and compresses the image to ensure the payload stays within 
@@ -131,14 +138,22 @@ export async function processAndResizeImage(file: File): Promise<ImageState> {
                     }
                     ctx.drawImage(img, 0, 0, width, height);
                     
-                    // Compress to JPEG with 0.8 quality to reduce payload size
-                    const resizedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                    const outputMimeType = file.type === 'image/png'
+                        ? 'image/png'
+                        : file.type === 'image/webp'
+                          ? 'image/webp'
+                          : 'image/jpeg';
+                    const resizedDataUrl = outputMimeType === 'image/png'
+                        ? canvas.toDataURL(outputMimeType)
+                        : canvas.toDataURL(outputMimeType, 0.82);
                     const base64 = resizedDataUrl.split(',')[1];
 
                     resolve({
                         fileName: file.name,
                         base64: base64,
-                        mimeType: 'image/jpeg',
+                        mimeType: outputMimeType,
+                        width: Math.round(width),
+                        height: Math.round(height),
                     });
                 };
                 img.onerror = () => {
@@ -290,7 +305,9 @@ export async function analyzeReferenceScene(base64Image: string): Promise<string
     contents: { parts: [imagePart, { text: prompt }] },
   }));
 
-  return response.text || "";
+  const result = response.text || "";
+  saveToCache(cacheKey, result);
+  return result;
 }
 
 /**
@@ -338,7 +355,9 @@ export async function analyzeClothingImage(base64Image: string): Promise<string>
     contents: { parts: [imagePart, { text: prompt }] },
   }));
 
-  return response.text || "";
+  const result = response.text || "";
+  saveToCache(cacheKey, result);
+  return result;
 }
 
 /**
@@ -533,6 +552,12 @@ export async function editImage(
     aspectRatio?: AspectRatio,
     seed?: number
 ): Promise<string> {
+  const inlineBytes = imageParts.reduce((total, part) => total + estimateBase64Bytes(part.inlineData.data), 0);
+  const promptBytes = new TextEncoder().encode(prompt).byteLength;
+  if (inlineBytes + promptBytes > MAX_INLINE_REQUEST_BYTES) {
+    throw new Error("This edit is too large to send efficiently. Remove extra reference assets or use fewer/lower-resolution images, then try again.");
+  }
+
   const textPart = { text: prompt };
   
   const ai = getAiClient();

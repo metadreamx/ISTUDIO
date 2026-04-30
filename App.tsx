@@ -1,13 +1,10 @@
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence, MotionConfig } from 'motion/react';
 import type { AppView, ImageState, ImageTransferState, Project, ReferenceTemplate } from './types';
-import { getProjects, saveProject, deleteProject as dbDeleteProject, getProjectStorageInfo, openProjectsFolder, type ProjectStorageInfo } from './services/db';
+import { getProject, getProjects, saveProject, deleteProject as dbDeleteProject, getProjectStorageInfo, openProjectsFolder, type ProjectStorageInfo } from './services/db';
 import { Logo, SpinnerIcon } from '@/components/icons';
 import { Tooltip } from '@/components/Tooltip';
-import { StyleTransferView } from '@/components/StyleTransferView';
-import { DashboardView } from '@/components/DashboardView';
-import { CanvasView } from '@/components/CanvasView';
 import { ApiKeyModal } from '@/components/ApiKeyModal';
 import { 
   LayoutDashboardIcon, 
@@ -20,6 +17,10 @@ import {
   SparklesIcon,
   ImagesIcon
 } from 'lucide-react';
+
+const DashboardView = lazy(() => import('@/components/DashboardView').then((module) => ({ default: module.DashboardView })));
+const StyleTransferView = lazy(() => import('@/components/StyleTransferView').then((module) => ({ default: module.StyleTransferView })));
+const CanvasView = lazy(() => import('@/components/CanvasView').then((module) => ({ default: module.CanvasView })));
 
 declare global {
   interface Window {
@@ -260,11 +261,11 @@ const App: React.FC = () => {
         setProjects(dbProjects);
         setProjectStorageInfo(storageInfo);
         if (!storageInfo) {
-          setToast("Project storage server is not running. Restart ISTUDIO with ISTUDIO.bat.");
+          setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH ISTUDIO.bat.");
         }
       } catch (e) {
         console.error("Failed to load project folder data", e);
-        setToast("Project storage server is not running. Restart ISTUDIO with ISTUDIO.bat.");
+        setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH ISTUDIO.bat.");
       } finally {
         setIsLoading(false);
       }
@@ -273,14 +274,12 @@ const App: React.FC = () => {
   }, []);
 
   const handleNavigate = (view: AppView) => {
-    console.log("Navigating to:", view);
     setActiveView(view);
   };
 
   const createProject = useCallback(async (name: string, nextView: AppView = 'style-transfer', initialState: Project['state'] = {}): Promise<Project | null> => {
-    console.log("Creating project:", name);
     if (!projectStorageInfo) {
-      setToast("Project storage server is not running. Restart ISTUDIO with ISTUDIO.bat.");
+      setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH ISTUDIO.bat.");
       return null;
     }
     const newProject: Project = {
@@ -340,12 +339,18 @@ const App: React.FC = () => {
     }
   }, [createProject, projectStorageInfo]);
 
-  const handleReopen = (project: Project) => {
-    console.log("Reopening project:", project.id);
-    setCurrentProject(project);
-    const hasCanvasDocument = Array.isArray(project.state?.canvas?.documents) && project.state.canvas.documents.length > 0;
-    const hasReferenceEditState = Boolean(project.state?.referenceImage || project.state?.targetImages?.length);
-    setActiveView(hasCanvasDocument && !hasReferenceEditState ? 'canvas' : 'style-transfer');
+  const handleReopen = async (project: Project) => {
+    try {
+      const fullProject = project.summary?.isSummary ? await getProject(project.id) : project;
+      setCurrentProject(fullProject);
+      setProjects(prev => prev.map(item => item.id === fullProject.id ? fullProject : item));
+      const hasCanvasDocument = Array.isArray(fullProject.state?.canvas?.documents) && fullProject.state.canvas.documents.length > 0;
+      const hasReferenceEditState = Boolean(fullProject.state?.referenceImage || fullProject.state?.targetImages?.length);
+      setActiveView(hasCanvasDocument && !hasReferenceEditState ? 'canvas' : 'style-transfer');
+    } catch (error) {
+      console.error("Failed to open project", error);
+      setToast("Could not open project");
+    }
   };
   
   const handleDeleteProject = useCallback(async (id: string) => {
@@ -366,7 +371,7 @@ const App: React.FC = () => {
   const handleUpdateProject = useCallback(async (updatedProject: Project) => {
     try {
       await saveProject(updatedProject);
-      setProjects(prev => prev.map(p => p.id === updatedProject.id ? updatedProject : p));
+      setProjects(prev => prev.map(p => p.id === updatedProject.id ? { ...updatedProject, summary: undefined } : p));
       setCurrentProject(prev => prev?.id === updatedProject.id ? updatedProject : prev);
     } catch (err) {
       console.error("Failed to update project in folder", err);
@@ -420,6 +425,11 @@ const App: React.FC = () => {
     }
     
     return (
+      <Suspense fallback={
+        <div className="flex-1 flex items-center justify-center">
+          <SpinnerIcon className="w-10 h-10 animate-spin text-[var(--color-accent)]" />
+        </div>
+      }>
       <AnimatePresence mode="wait">
         <motion.div
           key={activeView}
@@ -462,6 +472,7 @@ const App: React.FC = () => {
           )}
         </motion.div>
       </AnimatePresence>
+      </Suspense>
     );
   };
 

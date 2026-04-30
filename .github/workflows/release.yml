@@ -33,7 +33,7 @@ jobs:
         with:
           name: ISTUDIO-windows-release
           path: |
-            release/LAUNCH-ISTUDIO.bat
+            release/INSTALL-ISTUDIO.bat
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/')
@@ -44,15 +44,15 @@ jobs:
           $tag = "${{ github.ref_name }}"
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag release/LAUNCH-ISTUDIO.bat --clobber
+            gh release upload $tag release/INSTALL-ISTUDIO.bat --clobber
           } else {
-            gh release create $tag release/LAUNCH-ISTUDIO.bat --title "ISTUDIO $tag" --notes "Download LAUNCH-ISTUDIO.bat, place it where you want ISTUDIO installed, then double-click it."
+            gh release create $tag release/INSTALL-ISTUDIO.bat --title "ISTUDIO $tag" --notes "Download INSTALL-ISTUDIO.bat, place it where you want ISTUDIO installed, then double-click it."
           }
 
           $releases = gh api "repos/${{ github.repository }}/releases?per_page=100" | ConvertFrom-Json
           foreach ($release in $releases) {
             foreach ($asset in $release.assets) {
-              if ($asset.name -notlike "*.bat") {
+              if ($asset.name -ne "INSTALL-ISTUDIO.bat") {
                 gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$($asset.id)" *> $null
               }
             }

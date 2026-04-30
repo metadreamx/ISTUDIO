@@ -19,7 +19,8 @@ function Write-LauncherHeader {
   Clear-Host
   Write-Host ""
   Write-Host "========================================" -ForegroundColor DarkGray
-  Write-Host "  ISTUDIO by Iconic Recordings" -ForegroundColor White
+  Write-Host "  ISTUDIO Launcher" -ForegroundColor White
+  Write-Host "  Iconic Recordings" -ForegroundColor Gray
   Write-Host "========================================" -ForegroundColor DarkGray
   Write-Host ""
   Write-Host "Reference-based photo editing from the visual DNA of another image."
@@ -210,7 +211,7 @@ function Expand-IStudioBatPackage {
   }
 
   if (-not $foundPayload -or $payloadLines -eq 0) {
-    throw "The ISTUDIO installer package is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+    throw "The ISTUDIO installer package is incomplete. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   $payload = Get-Content -LiteralPath $payloadPath -Raw
@@ -253,7 +254,7 @@ function Assert-IStudioPackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
+    throw "The ISTUDIO release package is incomplete. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
   }
 }
 
@@ -335,7 +336,7 @@ function Assert-IStudioPackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
+    throw "The ISTUDIO release package is incomplete. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
   }
 }
 
@@ -412,7 +413,7 @@ function Install-Update {
   }
   if (-not $asset) {
     Write-Host "No ISTUDIO installer was found on the latest release." -ForegroundColor Red
-    Write-Host "Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+    Write-Host "Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
     if (-not $Automatic) {
       Pause-Launcher
     }
@@ -425,7 +426,7 @@ function Install-Update {
     $setupTemp = New-LocalSetupTemp
     $tempRoot = $setupTemp.Work
     $zipPath = Join-Path $tempRoot "ISTUDIO-windows.zip"
-    $installerBatPath = Join-Path $tempRoot "LAUNCH-ISTUDIO.bat"
+    $installerBatPath = Join-Path $tempRoot "INSTALL-ISTUDIO.bat"
     $extractPath = Join-Path $tempRoot "extract"
 
     New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
@@ -511,7 +512,7 @@ function Check-ForUpdates {
   if ($state.Status -eq "no-release") {
     Write-Host ""
     Write-Host "ISTUDIO release is not published yet." -ForegroundColor Yellow
-    Write-Host "Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases after the release is available."
+    Write-Host "Download the latest INSTALL-ISTUDIO.bat from GitHub Releases after the release is available."
     Pause-Launcher
     return $state
   }
@@ -519,7 +520,7 @@ function Check-ForUpdates {
   if ($state.Status -eq "repo-unavailable") {
     Write-Host ""
     Write-Host "ISTUDIO release is not available." -ForegroundColor Yellow
-    Write-Host "Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+    Write-Host "Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
     Pause-Launcher
     return $state
   }
@@ -578,7 +579,7 @@ function Assert-InstalledReleasePackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "This ISTUDIO install is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')."
+    throw "This ISTUDIO install is incomplete. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')."
   }
 }
 
@@ -589,19 +590,19 @@ function Ensure-AppReady {
   $node = Join-Path $AppDir "runtime\node\node.exe"
 
   if (-not $hasPortableNode -or -not (Test-Path $node)) {
-    throw "ISTUDIO is missing its bundled runtime. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+    throw "ISTUDIO is missing its bundled runtime. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   if (-not (Test-Path (Join-Path $AppDir "node_modules"))) {
-    throw "ISTUDIO is missing bundled app files. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+    throw "ISTUDIO is missing bundled app files. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   if (-not (Test-Path (Join-Path $AppDir "dist\index.html"))) {
-    throw "ISTUDIO is missing bundled app files. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+    throw "ISTUDIO is missing bundled app files. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   if (-not (Test-Path (Join-Path $AppDir "dist-server\server.js"))) {
-    throw "ISTUDIO is missing bundled app files. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+    throw "ISTUDIO is missing bundled app files. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   $script:NodeCommand = $node

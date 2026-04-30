@@ -42,6 +42,7 @@ const formatDate = (timestamp: number) =>
   });
 
 const getProjectOutputCount = (project: Project) => {
+  if (project.summary) return project.summary.outputCount;
   const historyCount = Array.isArray(project.state?.generationHistory)
     ? project.state.generationHistory.length
     : 0;
@@ -236,7 +237,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   );
 
   const totalOutputs = projects.reduce((sum, project) => sum + getProjectOutputCount(project), 0);
-  const canvasProjects = projects.filter((project) => Array.isArray(project.state?.canvas?.documents) && project.state.canvas.documents.length > 0);
+  const canvasProjects = projects.filter((project) =>
+    project.summary
+      ? project.summary.canvasDocumentCount > 0
+      : Array.isArray(project.state?.canvas?.documents) && project.state.canvas.documents.length > 0
+  );
   const featuredProject = useMemo(() => {
     if (sortedProjects.length === 0) return null;
     const previousProjects = sortedProjects.length > 1 ? sortedProjects.slice(1) : sortedProjects;

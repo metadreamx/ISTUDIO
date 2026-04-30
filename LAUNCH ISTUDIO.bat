@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-title ISTUDIO Setup
+title ISTUDIO
 set "ISTUDIO_SELF=%~f0"
 set "ISTUDIO_MODE=%~1"
 
@@ -21,6 +21,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:SetupHeaderTitle = "ISTUDIO Installer"
 
 function Write-SetupHeader {
   param([string]$Subtitle)
@@ -28,7 +29,7 @@ function Write-SetupHeader {
   Clear-Host
   Write-Host ""
   Write-Host "========================================" -ForegroundColor DarkGray
-  Write-Host "  ISTUDIO Setup" -ForegroundColor White
+  Write-Host "  $script:SetupHeaderTitle" -ForegroundColor White
   Write-Host "  Iconic Recordings" -ForegroundColor Gray
   Write-Host "========================================" -ForegroundColor DarkGray
   Write-Host ""
@@ -92,7 +93,7 @@ function New-LocalSetupTemp {
     [System.IO.File]::WriteAllText($probePath, "ok", [System.Text.Encoding]::ASCII)
     Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
   } catch {
-    throw "ISTUDIO needs to unpack setup files beside the launcher, but this folder is not writable: $launcherDir. Move LAUNCH-ISTUDIO.bat to a writable folder such as Desktop, Documents, or an external drive, then run it again."
+    throw "ISTUDIO needs to unpack setup files beside the installer, but this folder is not writable: $launcherDir. Move INSTALL-ISTUDIO.bat to a writable folder such as Desktop, Documents, or an external drive, then run it again."
   }
 
   $tempRoot = Join-Path $setupRoot ("setup-" + [guid]::NewGuid())
@@ -131,7 +132,7 @@ function Assert-IStudioPackage {
   param([string]$PackageRoot)
 
   if (-not (Test-IStudioInstall -Path $PackageRoot)) {
-    throw "The ISTUDIO installer package is incomplete. Download a fresh LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+    throw "The ISTUDIO installer package is incomplete. Download a fresh INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
   }
 }
 
@@ -162,7 +163,7 @@ function Export-EmbeddedPackage {
   }
 
   if (-not $foundPayload -or $payloadLines -eq 0) {
-    throw "This setup file does not include the ISTUDIO app package. Download the one-click installer from https://github.com/metadreamx/ISTUDIO/releases/latest/download/LAUNCH-ISTUDIO.bat."
+    throw "This setup file does not include the ISTUDIO app package. Download the one-click installer from https://github.com/metadreamx/ISTUDIO/releases/latest/download/INSTALL-ISTUDIO.bat."
   }
 
   $payload = Get-Content -LiteralPath $payloadPath -Raw
@@ -237,12 +238,14 @@ if (-not [string]::IsNullOrWhiteSpace($Mode)) {
 }
 
 $installDir = Get-InstallDirectory -InstallerPath $Self
+$script:SetupHeaderTitle = if (Test-IStudioInstall -Path $installDir) { "ISTUDIO Launcher" } else { "ISTUDIO Installer" }
+$Host.UI.RawUI.WindowTitle = $script:SetupHeaderTitle
 
 Write-SetupHeader -Subtitle "Reference-based photo editing, installed where you choose."
 Write-Host "Install location" -ForegroundColor Gray
 Write-Host "  $installDir" -ForegroundColor White
 Write-Host ""
-Write-Host "To install somewhere else, close this window, move this BAT file to the folder you want, then run it again." -ForegroundColor DarkGray
+Write-Host "To install somewhere else, close this window, move INSTALL-ISTUDIO.bat to the folder you want, then run it again." -ForegroundColor DarkGray
 Write-Host ""
 
 if (Test-IStudioInstall -Path $installDir) {
@@ -289,7 +292,7 @@ try {
   Write-Host $_.Exception.Message
   Write-Host ""
   Write-Host "Download the latest installer from:" -ForegroundColor Gray
-  Write-Host "https://github.com/metadreamx/ISTUDIO/releases/latest/download/LAUNCH-ISTUDIO.bat" -ForegroundColor White
+  Write-Host "https://github.com/metadreamx/ISTUDIO/releases/latest/download/INSTALL-ISTUDIO.bat" -ForegroundColor White
   Write-Host ""
   exit 1
 } finally {

@@ -32,6 +32,8 @@ type StoredImageState = {
   fileName: string | null;
   base64: string | null;
   mimeType: string | null;
+  width?: number | null;
+  height?: number | null;
   assetPath?: string;
 };
 
@@ -227,6 +229,49 @@ async function readProjects(): Promise<StoredProject[]> {
     .sort((a, b) => b.lastModified - a.lastModified);
 }
 
+function getArrayAtPath(value: unknown, keys: string[]): unknown[] {
+  let current = value;
+  for (const key of keys) {
+    if (!isRecord(current)) return [];
+    current = current[key];
+  }
+  return Array.isArray(current) ? current : [];
+}
+
+async function readProjectSummaryFromDirectory(projectDir: string): Promise<(StoredProject & { summary: { isSummary: true; outputCount: number; canvasDocumentCount: number } }) | null> {
+  const projectPath = path.join(projectDir, PROJECT_JSON);
+  const project = await readRawProjectFile(projectPath);
+  if (!project) return null;
+
+  const state = isRecord(project.state) ? project.state : {};
+  const history = getArrayAtPath(state, ['generationHistory']);
+  const canvasDocuments = getArrayAtPath(state, ['canvas', 'documents']);
+  const generatedImages = Array.isArray(project.generatedImages) ? project.generatedImages : [];
+
+  return {
+    id: project.id,
+    name: project.name,
+    createdAt: project.createdAt,
+    lastModified: project.lastModified,
+    generatedImages: [],
+    state: {},
+    summary: {
+      isSummary: true,
+      outputCount: Math.max(history.length, generatedImages.length),
+      canvasDocumentCount: canvasDocuments.length,
+    },
+  };
+}
+
+async function readProjectSummaries(): Promise<(StoredProject & { summary: { isSummary: true; outputCount: number; canvasDocumentCount: number } })[]> {
+  await migrateLegacyProjectFiles();
+  const directories = await projectDirectories();
+  const summaries = await Promise.all(directories.map(readProjectSummaryFromDirectory));
+  return summaries
+    .filter((project): project is StoredProject & { summary: { isSummary: true; outputCount: number; canvasDocumentCount: number } } => project !== null)
+    .sort((a, b) => b.lastModified - a.lastModified);
+}
+
 async function findProjectDir(id: string): Promise<string | null> {
   const directories = await projectDirectories();
   for (const projectDir of directories) {
@@ -256,12 +301,16 @@ async function persistImageState(value: StoredImageState, projectDir: string, se
   const targetPath = path.join(targetDir, assetFileName(baseName, value.mimeType, value.base64));
 
   await fs.mkdir(targetDir, { recursive: true });
-  await fs.writeFile(targetPath, Buffer.from(value.base64, 'base64'));
+  if (!existsSync(targetPath)) {
+    await fs.writeFile(targetPath, Buffer.from(value.base64, 'base64'));
+  }
 
   return {
     fileName: value.fileName,
     base64: null,
     mimeType: value.mimeType,
+    width: value.width ?? null,
+    height: value.height ?? null,
     assetPath: relativeAssetPath(projectDir, targetPath),
   };
 }
@@ -276,7 +325,9 @@ async function persistDataUrl(value: string, projectDir: string, segments: strin
   const targetPath = path.join(targetDir, assetFileName(baseName, parsed.mimeType, parsed.base64));
 
   await fs.mkdir(targetDir, { recursive: true });
-  await fs.writeFile(targetPath, Buffer.from(parsed.base64, 'base64'));
+  if (!existsSync(targetPath)) {
+    await fs.writeFile(targetPath, Buffer.from(parsed.base64, 'base64'));
+  }
 
   return {
     __istudioAsset: true,
@@ -381,12 +432,31 @@ async function startServer() {
   await ensureProjectsDir();
   await migrateLegacyProjectFiles();
 
-  app.get('/api/projects', async (_req, res) => {
+  app.get('/api/projects', async (req, res) => {
     try {
-      res.json(await readProjects());
+      res.json(req.query.summary === '1' ? await readProjectSummaries() : await readProjects());
     } catch (error) {
       console.error('Failed to read projects folder', error);
       res.status(500).json({ error: 'Failed to read projects folder.' });
+    }
+  });
+
+  app.get('/api/projects/:id', async (req, res) => {
+    try {
+      const projectDir = await findProjectDir(req.params.id);
+      if (!projectDir) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      const project = await readProjectFromDirectory(projectDir);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      res.json(project);
+    } catch (error) {
+      console.error('Failed to read project folder', error);
+      res.status(500).json({ error: 'Failed to read project folder.' });
     }
   });
 
@@ -418,7 +488,7 @@ async function startServer() {
   app.get('/api/projects-folder', async (_req, res) => {
     try {
       await ensureProjectsDir();
-      const projects = await readProjects();
+      const projects = await projectDirectories();
       res.json({
         path: PROJECTS_DIR,
         projectCount: projects.length,
@@ -468,7 +538,7 @@ async function startServer() {
 
   server.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'EADDRINUSE') {
-      console.error(`Port ${PORT} is already in use. Close the old ISTUDIO launcher window, then run ISTUDIO.bat again.`);
+      console.error(`Port ${PORT} is already in use. Close the old ISTUDIO launcher window, then run LAUNCH ISTUDIO.bat again.`);
     } else {
       console.error('Failed to start ISTUDIO server', error);
     }

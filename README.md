@@ -15,22 +15,22 @@ ISTUDIO is a Windows-first creative app for reference-based photo editing and ca
 
 ### For Windows Users
 
-**Download this file:**
+**Download this installer:**
 
-[Download LAUNCH-ISTUDIO.bat](https://github.com/metadreamx/ISTUDIO/releases/latest/download/LAUNCH-ISTUDIO.bat)
+[Download INSTALL-ISTUDIO.bat](https://github.com/metadreamx/ISTUDIO/releases/latest/download/INSTALL-ISTUDIO.bat)
 
 Then:
 
-1. Move `LAUNCH-ISTUDIO.bat` to the folder where you want ISTUDIO installed.
+1. Move `INSTALL-ISTUDIO.bat` to the folder where you want ISTUDIO installed.
    Good choices are Desktop, Documents, or an external drive.
-2. Double-click `LAUNCH-ISTUDIO.bat`.
+2. Double-click `INSTALL-ISTUDIO.bat`.
 3. ISTUDIO creates an `ISTUDIO` folder beside the BAT file.
 4. The installer sets up the complete app and starts ISTUDIO.
 5. Keep the launcher window open while using ISTUDIO. Closing it stops the local app server.
 
-Users do not need to install Node.js, npm, or developer tools. The Windows release includes everything ISTUDIO needs to run.
+Users do not need to install developer tools. The Windows release includes everything ISTUDIO needs to run.
 
-Do not use GitHub's green **Code > Download ZIP** button unless you are a developer. Regular users should download `LAUNCH-ISTUDIO.bat` from Releases.
+Do not use GitHub's green **Code > Download ZIP** button for installation. Regular users should download `INSTALL-ISTUDIO.bat` from Releases.
 
 ## Google API Key Required
 
@@ -64,7 +64,7 @@ The menu includes:
 Projects are saved inside the installed ISTUDIO folder:
 
 ```text
-<folder with LAUNCH-ISTUDIO.bat>\ISTUDIO\projects
+<folder with INSTALL-ISTUDIO.bat>\ISTUDIO\projects
 ```
 
 Each project gets its own folder with reference images, target photos, generated outputs, Canvas assets, exports, saved settings, and generation history. Project data stays on the user's computer.
@@ -84,5 +84,5 @@ Updates preserve:
 
 - If Windows blocks the BAT file, choose **More info > Run anyway** only if you downloaded it from this official GitHub Releases page.
 - If ISTUDIO does not open, close any old ISTUDIO launcher windows and run `LAUNCH ISTUDIO.bat` again.
-- If you want to install somewhere else, move `LAUNCH-ISTUDIO.bat` to that folder before running it.
+- If you want to install somewhere else, move `INSTALL-ISTUDIO.bat` to that folder before running it.
 - If update checking fails because the computer is offline, ISTUDIO will still launch the installed version.

@@ -127,7 +127,7 @@ $releaseDir = Join-Path $root "release"
 $stageRoot = Join-Path $releaseDir "stage"
 $appStage = Join-Path $stageRoot "ISTUDIO"
 $zipPath = Join-Path $releaseDir "ISTUDIO-windows.zip"
-$batPath = Join-Path $releaseDir "LAUNCH-ISTUDIO.bat"
+$batPath = Join-Path $releaseDir "INSTALL-ISTUDIO.bat"
 
 Push-Location $root
 try {
@@ -226,11 +226,25 @@ try {
   }
 
   Write-ReleaseInstaller -Source (Join-Path $root "LAUNCH ISTUDIO.bat") -Destination $batPath -Repo $Repo -PackageZip $zipPath
-  Remove-Item -LiteralPath (Join-Path $releaseDir "Install-ISTUDIO.bat") -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath (Join-Path $releaseDir "Install-ISTUDIO.ps1") -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath (Join-Path $releaseDir "ISTUDIO.bat") -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath (Join-Path $releaseDir "ISTUDIO.exe") -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath (Join-Path $releaseDir "LAUNCH ISTUDIO.bat") -Force -ErrorAction SilentlyContinue
+
+  $staleReleaseAssets = @(
+    "ISTUDIO.bat",
+    "ISTUDIO.exe",
+    "LAUNCH ISTUDIO.bat",
+    "LAUNCH-ISTUDIO.bat",
+    "Install-ISTUDIO.ps1"
+  )
+
+  foreach ($asset in $staleReleaseAssets) {
+    Remove-Item -LiteralPath (Join-Path $releaseDir $asset) -Force -ErrorAction SilentlyContinue
+  }
+
+  Get-ChildItem -LiteralPath $releaseDir -File |
+    Where-Object {
+      $_.Name -ne "INSTALL-ISTUDIO.bat" -and
+      ($_.Extension -in @(".bat", ".cmd", ".exe", ".ps1"))
+    } |
+    Remove-Item -Force
 
   Write-Host ""
   Write-Host "Release package created:" -ForegroundColor Green

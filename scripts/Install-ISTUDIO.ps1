@@ -39,7 +39,7 @@ function New-LocalSetupTemp {
     [System.IO.File]::WriteAllText($probePath, "ok", [System.Text.Encoding]::ASCII)
     Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
   } catch {
-    throw "ISTUDIO needs to unpack setup files beside the launcher, but this folder is not writable: $baseDir. Move LAUNCH-ISTUDIO.bat to a writable folder such as Desktop, Documents, or an external drive, then run it again."
+    throw "ISTUDIO needs to unpack setup files beside the installer, but this folder is not writable: $baseDir. Move INSTALL-ISTUDIO.bat to a writable folder such as Desktop, Documents, or an external drive, then run it again."
   }
 
   $tempRoot = Join-Path $setupRoot ("install-" + [guid]::NewGuid())
@@ -93,7 +93,7 @@ function Assert-IStudioPackage {
   }
 
   if ($missing.Count -gt 0) {
-    throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
+    throw "The ISTUDIO release package is incomplete. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again. Missing: $($missing -join ', ')"
   }
 }
 
@@ -149,7 +149,7 @@ function Expand-IStudioBatPackage {
   }
 
   if (-not $foundPayload -or $payloadLines -eq 0) {
-    throw "The ISTUDIO installer package is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+    throw "The ISTUDIO installer package is incomplete. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   $payload = Get-Content -LiteralPath $payloadPath -Raw
@@ -169,16 +169,16 @@ function Get-LatestRelease {
     if ($statusCode -eq 404) {
       try {
         Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo" -Headers $headers -TimeoutSec 15 | Out-Null
-        throw "ISTUDIO release is not published yet. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases after the release is available."
+        throw "ISTUDIO release is not published yet. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases after the release is available."
       } catch {
         if ($_.Exception.Message -like "ISTUDIO release is not published yet*") {
           throw
         }
-        throw "ISTUDIO release is not available. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+        throw "ISTUDIO release is not available. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
       }
     }
 
-    throw "Could not reach ISTUDIO releases. Check your internet connection, then run LAUNCH-ISTUDIO.bat again. $($_.Exception.Message)"
+    throw "Could not reach ISTUDIO releases. Check your internet connection, then run INSTALL-ISTUDIO.bat again. $($_.Exception.Message)"
   }
 }
 
@@ -194,7 +194,7 @@ try {
   $setupTemp = New-LocalSetupTemp -InstallDir $InstallDir
   $tempRoot = $setupTemp.Work
   $zipPath = Join-Path $tempRoot "ISTUDIO-windows.zip"
-  $installerBatPath = Join-Path $tempRoot "LAUNCH-ISTUDIO.bat"
+  $installerBatPath = Join-Path $tempRoot "INSTALL-ISTUDIO.bat"
   $extractPath = Join-Path $tempRoot "extract"
 
   Write-Step "Finding the latest ISTUDIO release"
@@ -206,7 +206,7 @@ try {
     $assetMode = "bat"
   }
   if (-not $asset) {
-    throw "The ISTUDIO release package is missing. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+    throw "The ISTUDIO release package is missing. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
   }
 
   New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
@@ -268,7 +268,7 @@ try {
     if ($LaunchInline -or $MenuInline) {
       $launcherScript = Join-Path $InstallDir "scripts\ISTUDIO-Launcher.ps1"
       if (-not (Test-Path $launcherScript)) {
-        throw "The ISTUDIO release package is incomplete. Download the latest LAUNCH-ISTUDIO.bat from GitHub Releases and run it again."
+        throw "The ISTUDIO release package is incomplete. Download the latest INSTALL-ISTUDIO.bat from GitHub Releases and run it again."
       }
       Remove-LocalSetupTemp -SetupTemp $setupTemp
       $setupTemp = $null

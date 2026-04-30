@@ -52,6 +52,7 @@ import type {
   CanvasBrushLayer,
   CanvasDocument,
   CanvasExportFormat,
+  CanvasImageFitMode,
   CanvasImageLayer,
   CanvasLayer,
   CanvasPanel,
@@ -117,13 +118,89 @@ const imageStateToDataUrl = (image?: ImageState | null) => {
   return `data:${image.mimeType};base64,${image.base64}`;
 };
 
-const dataUrlToImageState = (dataUrl: string, fileName: string): ImageState => {
+const dataUrlToImageState = (dataUrl: string, fileName: string, width?: number, height?: number): ImageState => {
   const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
   return {
     fileName,
     mimeType: match?.[1] || 'image/png',
     base64: match?.[2] || '',
+    width,
+    height,
   };
+};
+
+const getImageNaturalSize = (image?: ImageState | null) => {
+  const width = Number(image?.width) > 0 ? Number(image?.width) : 1080;
+  const height = Number(image?.height) > 0 ? Number(image?.height) : 1080;
+  return { width, height, ratio: width / height };
+};
+
+const fitSizeWithin = (naturalWidth: number, naturalHeight: number, maxWidth: number, maxHeight: number) => {
+  const ratio = naturalWidth / naturalHeight || 1;
+  let width = maxWidth;
+  let height = width / ratio;
+  if (height > maxHeight) {
+    height = maxHeight;
+    width = height * ratio;
+  }
+  return { width: Math.max(24, width), height: Math.max(24, height) };
+};
+
+const createImageLayerFromAsset = (asset: CanvasAsset, document: CanvasDocument, index = 0): CanvasImageLayer => {
+  const natural = getImageNaturalSize(asset.image);
+  const size = fitSizeWithin(natural.width, natural.height, document.width * 0.58, document.height * 0.58);
+  return {
+    id: createId('image'),
+    type: 'image',
+    name: asset.name,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    x: document.width * 0.16 + index * 24,
+    y: document.height * 0.16 + index * 24,
+    width: size.width,
+    height: size.height,
+    rotation: 0,
+    source: asset.image,
+    fitMode: 'fit',
+    crop: null,
+    naturalWidth: natural.width,
+    naturalHeight: natural.height,
+    flipX: false,
+    flipY: false,
+    brightness: 0,
+    contrast: 0,
+    saturation: 0,
+  };
+};
+
+const getCoverCrop = (image: HTMLImageElement, frameWidth: number, frameHeight: number) => {
+  const imageRatio = image.width / image.height;
+  const frameRatio = frameWidth / frameHeight;
+  if (imageRatio > frameRatio) {
+    const width = image.height * frameRatio;
+    return { x: (image.width - width) / 2, y: 0, width, height: image.height };
+  }
+  const height = image.width / frameRatio;
+  return { x: 0, y: (image.height - height) / 2, width: image.width, height };
+};
+
+const normalizeImageResize = (layer: CanvasImageLayer, updates: Partial<CanvasImageLayer>): Partial<CanvasImageLayer> => {
+  const fitMode = updates.fitMode ?? layer.fitMode ?? 'fit';
+  if (fitMode !== 'fit') return updates;
+  const naturalWidth = updates.naturalWidth || layer.naturalWidth || layer.source.width || 1080;
+  const naturalHeight = updates.naturalHeight || layer.naturalHeight || layer.source.height || 1080;
+  const ratio = naturalWidth / naturalHeight || 1;
+  if (updates.fitMode === 'fit' && !updates.width && !updates.height) {
+    return { ...updates, height: Math.max(24, layer.width / ratio) };
+  }
+  if (updates.width && !updates.height) return { ...updates, height: Math.max(24, updates.width / ratio) };
+  if (updates.height && !updates.width) return { ...updates, width: Math.max(24, updates.height * ratio) };
+  if (updates.width && updates.height) {
+    const width = Math.max(24, updates.width);
+    return { ...updates, width, height: Math.max(24, width / ratio) };
+  }
+  return updates;
 };
 
 const downloadDataUrl = (dataUrl: string, fileName: string) => {
@@ -180,38 +257,80 @@ const CanvasImageNode: React.FC<{
   onChange: (updates: Partial<CanvasImageLayer>) => void;
 }> = ({ layer, selected, registerNode, onSelect, onChange }) => {
   const image = useCanvasImage(layer.source);
+  const imageNodeRef = useRef<Konva.Image | null>(null);
+  const fitMode = layer.fitMode || 'fit';
+  const hasFilters = Boolean(layer.brightness || layer.contrast || layer.saturation);
+  const shouldCrop = Boolean(image && (fitMode === 'fill' || fitMode === 'crop'));
+  const crop = shouldCrop
+    ? (layer.crop && layer.crop.width > 0 && layer.crop.height > 0 ? layer.crop : getCoverCrop(image!, layer.width, layer.height))
+    : undefined;
+  const displayX = layer.x + (layer.flipX ? layer.width : 0);
+  const displayY = layer.y + (layer.flipY ? layer.height : 0);
+
+  useEffect(() => {
+    const node = imageNodeRef.current;
+    if (!node || !image) return;
+    if (hasFilters) {
+      node.cache();
+    } else {
+      node.clearCache();
+    }
+    node.getLayer()?.batchDraw();
+  }, [hasFilters, image, layer.brightness, layer.contrast, layer.saturation, layer.width, layer.height, crop?.x, crop?.y, crop?.width, crop?.height]);
 
   return (
     <KonvaImage
-      ref={(node) => registerNode(layer.id, node)}
+      ref={(node) => {
+        imageNodeRef.current = node;
+        registerNode(layer.id, node);
+      }}
       image={image || undefined}
-      x={layer.x}
-      y={layer.y}
+      x={displayX}
+      y={displayY}
       width={layer.width}
       height={layer.height}
+      crop={crop}
+      filters={hasFilters ? [Konva.Filters.Brighten, Konva.Filters.Contrast, Konva.Filters.HSL] : undefined}
+      brightness={(layer.brightness || 0) / 100}
+      contrast={layer.contrast || 0}
+      saturation={(layer.saturation || 0) / 100}
       rotation={layer.rotation}
       opacity={layer.opacity}
       visible={layer.visible}
       draggable={!layer.locked}
       listening={!layer.locked}
+      scaleX={layer.flipX ? -1 : 1}
+      scaleY={layer.flipY ? -1 : 1}
       shadowColor={selected ? '#C8FF2F' : undefined}
       shadowBlur={selected ? 18 : 0}
       onClick={onSelect}
       onTap={onSelect}
-      onDragEnd={(event) => onChange({ x: event.target.x(), y: event.target.y() })}
+      perfectDrawEnabled={false}
+      onDragEnd={(event) => onChange({
+        x: event.target.x() - (layer.flipX ? layer.width : 0),
+        y: event.target.y() - (layer.flipY ? layer.height : 0),
+      })}
       onTransformEnd={(event) => {
         const node = event.target;
-        const scaleX = node.scaleX();
-        const scaleY = node.scaleY();
-        node.scaleX(1);
-        node.scaleY(1);
-        onChange({
-          x: node.x(),
-          y: node.y(),
-          width: Math.max(24, node.width() * scaleX),
-          height: Math.max(24, node.height() * scaleY),
+        const rawScaleX = Math.abs(node.scaleX());
+        const rawScaleY = Math.abs(node.scaleY());
+        const nextWidth = Math.max(24, node.width() * rawScaleX);
+        const nextHeight = Math.max(24, node.height() * rawScaleY);
+        node.scaleX(layer.flipX ? -1 : 1);
+        node.scaleY(layer.flipY ? -1 : 1);
+        onChange(normalizeImageResize({
+          ...layer,
+          naturalWidth: image?.width || layer.naturalWidth,
+          naturalHeight: image?.height || layer.naturalHeight,
+        }, {
+          x: node.x() - (layer.flipX ? nextWidth : 0),
+          y: node.y() - (layer.flipY ? nextHeight : 0),
+          width: nextWidth,
+          height: nextHeight,
+          naturalWidth: image?.width || layer.naturalWidth,
+          naturalHeight: image?.height || layer.naturalHeight,
           rotation: node.rotation(),
-        });
+        }));
       }}
     />
   );
@@ -582,6 +701,7 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
   const transformerRef = useRef<Konva.Transformer | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const replaceInputRef = useRef<HTMLInputElement | null>(null);
   const nodeRefs = useRef<Record<string, Konva.Node | null>>({});
   const saveTimerRef = useRef<number | null>(null);
   const projectRef = useRef<Project | null>(project);
@@ -765,14 +885,26 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
     if (!selectedLayerId) return;
     commitDocument((current) => ({
       ...current,
-      layers: current.layers.map((layer) => (layer.id === selectedLayerId ? { ...layer, ...updates } as CanvasLayer : layer)),
+      layers: current.layers.map((layer) => {
+        if (layer.id !== selectedLayerId) return layer;
+        const nextUpdates = (layer.type === 'image' || layer.type === 'reference' || layer.type === 'ai-result')
+          ? normalizeImageResize(layer, updates as Partial<CanvasImageLayer>)
+          : updates;
+        return { ...layer, ...nextUpdates } as CanvasLayer;
+      }),
     }), label);
   }, [commitDocument, selectedLayerId]);
 
   const updateLayer = useCallback((id: string, updates: Partial<CanvasLayer>, label = 'Update layer') => {
     commitDocument((current) => ({
       ...current,
-      layers: current.layers.map((layer) => (layer.id === id ? { ...layer, ...updates } as CanvasLayer : layer)),
+      layers: current.layers.map((layer) => {
+        if (layer.id !== id) return layer;
+        const nextUpdates = (layer.type === 'image' || layer.type === 'reference' || layer.type === 'ai-result')
+          ? normalizeImageResize(layer, updates as Partial<CanvasImageLayer>)
+          : updates;
+        return { ...layer, ...nextUpdates } as CanvasLayer;
+      }),
     }), label);
   }, [commitDocument]);
 
@@ -849,20 +981,7 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
     }));
 
     commitDocument((current) => {
-      const layers: CanvasLayer[] = assets.map((asset, index) => ({
-        id: createId('image'),
-        type: 'image',
-        name: asset.name,
-        visible: true,
-        locked: false,
-        opacity: 1,
-        x: current.width * 0.16 + index * 24,
-        y: current.height * 0.16 + index * 24,
-        width: current.width * 0.52,
-        height: current.height * 0.52,
-        rotation: 0,
-        source: asset.image,
-      }));
+      const layers: CanvasLayer[] = assets.map((asset, index) => createImageLayerFromAsset(asset, current, index));
       return {
         ...current,
         assets: [...current.assets, ...assets],
@@ -881,6 +1000,41 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
     }
     event.target.value = '';
   }, [handleImageFiles]);
+
+  const handleReplaceSelectedImage = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !selectedLayer || !(selectedLayer.type === 'image' || selectedLayer.type === 'reference' || selectedLayer.type === 'ai-result')) return;
+
+    setStatus('Replacing image');
+    try {
+      const image = await processAndResizeImage(file);
+      const natural = getImageNaturalSize(image);
+      updateSelectedLayer({
+        source: image,
+        naturalWidth: natural.width,
+        naturalHeight: natural.height,
+        fitMode: 'fit',
+        crop: null,
+      } as Partial<CanvasImageLayer>, 'Replace image');
+      setStatus('Image replaced');
+    } catch (error) {
+      console.error('Image replace failed', error);
+      setStatus(error instanceof Error ? error.message : 'Image replace failed');
+    }
+  }, [selectedLayer, updateSelectedLayer]);
+
+  const alignSelectedLayer = useCallback((position: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom') => {
+    if (!document || !selectedLayer) return;
+    const updates: Partial<CanvasLayer> = {};
+    if (position === 'left') updates.x = 0;
+    if (position === 'center') updates.x = (document.width - selectedLayer.width) / 2;
+    if (position === 'right') updates.x = document.width - selectedLayer.width;
+    if (position === 'top') updates.y = 0;
+    if (position === 'middle') updates.y = (document.height - selectedLayer.height) / 2;
+    if (position === 'bottom') updates.y = document.height - selectedLayer.height;
+    updateSelectedLayer(updates, 'Align layer');
+  }, [document, selectedLayer, updateSelectedLayer]);
 
   const deleteSelectedLayer = useCallback(() => {
     if (!selectedLayerId) return;
@@ -961,11 +1115,28 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
         event.preventDefault();
         deleteSelectedLayer();
       }
+      if (selectedLayerId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+        event.preventDefault();
+        const amount = event.shiftKey ? 10 : 1;
+        const delta = {
+          ArrowUp: { y: -amount },
+          ArrowDown: { y: amount },
+          ArrowLeft: { x: -amount },
+          ArrowRight: { x: amount },
+        }[event.key]!;
+        const layer = document.layers.find((item) => item.id === selectedLayerId);
+        if (layer) {
+          updateLayer(selectedLayerId, {
+            x: layer.x + (delta.x || 0),
+            y: layer.y + (delta.y || 0),
+          }, 'Nudge layer');
+        }
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [deleteSelectedLayer, document, duplicateSelectedLayer, redo, undo]);
+  }, [deleteSelectedLayer, document, duplicateSelectedLayer, redo, selectedLayerId, undo, updateLayer]);
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
@@ -1068,7 +1239,7 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
         pixelRatio: 1 / zoom,
         mimeType: 'image/png',
       });
-      const imageState = dataUrlToImageState(dataUrl, 'canvas-composite.png');
+      const imageState = dataUrlToImageState(dataUrl, 'canvas-composite.png', document.width, document.height);
       if (!imageState.base64 || !imageState.mimeType) throw new Error('Could not prepare the canvas composite.');
 
       const result = await editImage(
@@ -1092,7 +1263,18 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
           fileName: `ai-unified-${Date.now()}.png`,
           mimeType: 'image/png',
           base64: result,
+          width: document.width,
+          height: document.height,
         },
+        fitMode: 'fit',
+        crop: null,
+        naturalWidth: document.width,
+        naturalHeight: document.height,
+        flipX: false,
+        flipY: false,
+        brightness: 0,
+        contrast: 0,
+        saturation: 0,
       };
 
       addLayer(aiLayer, 'AI assist');
@@ -1133,10 +1315,15 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
     { id: 'ai', label: 'AI Assist', icon: <Sparkles className="h-4 w-4" /> },
     { id: 'history', label: 'History', icon: <History className="h-4 w-4" /> },
   ];
+  const selectedImageLayer = selectedLayer && (selectedLayer.type === 'image' || selectedLayer.type === 'reference' || selectedLayer.type === 'ai-result')
+    ? selectedLayer
+    : null;
+  const selectedImageFitMode = selectedImageLayer?.fitMode || 'fit';
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[64px_1fr] grid-rows-[minmax(0,1fr)_minmax(260px,36vh)] bg-[var(--color-bg)] lg:grid-cols-[64px_1fr_360px] lg:grid-rows-none">
       <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileInput} />
+      <input ref={replaceInputRef} type="file" accept="image/*" className="hidden" onChange={handleReplaceSelectedImage} />
 
       <aside className="flex min-h-0 flex-col items-center gap-2 border-r border-[var(--color-border)] bg-[var(--color-sidebar)] p-3">
         {tools.map((tool) => (
@@ -1275,6 +1462,7 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
                 <Transformer
                   ref={transformerRef}
                   rotateEnabled
+                  keepRatio={selectedImageLayer ? selectedImageFitMode !== 'stretch' : false}
                   borderStroke="#C8FF2F"
                   anchorStroke="#C8FF2F"
                   anchorFill="#090A0C"
@@ -1381,20 +1569,7 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
                     key={asset.id}
                     type="button"
                     onClick={() => {
-                      addLayer({
-                        id: createId('image'),
-                        type: 'image',
-                        name: asset.name,
-                        visible: true,
-                        locked: false,
-                        opacity: 1,
-                        x: document.width * 0.18,
-                        y: document.height * 0.18,
-                        width: document.width * 0.48,
-                        height: document.height * 0.48,
-                        rotation: 0,
-                        source: asset.image,
-                      }, 'Place asset');
+                      addLayer(createImageLayerFromAsset(asset, document), 'Place asset');
                     }}
                     className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-left hover:border-[var(--color-border-hover)]"
                   >
@@ -1474,6 +1649,61 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
                     <NumberField label="Rotate" value={selectedLayer.rotation} onChange={(value) => updateSelectedLayer({ rotation: value }, 'Rotate layer')} />
                     <NumberField label="Opacity" value={Math.round(selectedLayer.opacity * 100)} min={0} max={100} onChange={(value) => updateSelectedLayer({ opacity: Math.min(1, Math.max(0, value / 100)) }, 'Opacity')} />
                   </div>
+
+                  <div className="grid grid-cols-3 gap-2 border-t border-[var(--color-border)] pt-4">
+                    <button type="button" onClick={() => alignSelectedLayer('left')} className="btn-secondary py-2 text-[11px]">Left</button>
+                    <button type="button" onClick={() => alignSelectedLayer('center')} className="btn-secondary py-2 text-[11px]">Center</button>
+                    <button type="button" onClick={() => alignSelectedLayer('right')} className="btn-secondary py-2 text-[11px]">Right</button>
+                    <button type="button" onClick={() => alignSelectedLayer('top')} className="btn-secondary py-2 text-[11px]">Top</button>
+                    <button type="button" onClick={() => alignSelectedLayer('middle')} className="btn-secondary py-2 text-[11px]">Middle</button>
+                    <button type="button" onClick={() => alignSelectedLayer('bottom')} className="btn-secondary py-2 text-[11px]">Bottom</button>
+                  </div>
+
+                  {selectedImageLayer && (
+                    <div className="space-y-3 border-t border-[var(--color-border)] pt-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-xs font-black text-[var(--color-text)]">Image frame</h3>
+                          <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-muted)]">Fit and crop modes preserve image proportions. Stretch is explicit.</p>
+                        </div>
+                        <button type="button" onClick={() => replaceInputRef.current?.click()} className="btn-secondary shrink-0 px-3 py-2 text-[11px]">
+                          Replace
+                        </button>
+                      </div>
+                      <label className="space-y-1.5">
+                        <span className="text-[11px] font-semibold text-[var(--color-text-muted)]">Fit mode</span>
+                        <select
+                          value={selectedImageFitMode}
+                          onChange={(event) => updateSelectedLayer({
+                            fitMode: event.target.value as CanvasImageFitMode,
+                            crop: null,
+                          } as Partial<CanvasImageLayer>, 'Image fit mode')}
+                          className="h-10 w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3 text-xs font-semibold text-[var(--color-text)]"
+                        >
+                          <option value="fit">Fit - keep full image</option>
+                          <option value="fill">Fill - crop to frame</option>
+                          <option value="crop">Crop - centered crop</option>
+                          <option value="stretch">Stretch - free transform</option>
+                        </select>
+                      </label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button type="button" onClick={() => updateSelectedLayer({ crop: null } as Partial<CanvasImageLayer>, 'Reset crop')} className="btn-secondary py-2 text-[11px]">
+                          Reset crop
+                        </button>
+                        <button type="button" onClick={() => updateSelectedLayer({ flipX: !selectedImageLayer.flipX } as Partial<CanvasImageLayer>, 'Flip horizontal')} className="btn-secondary py-2 text-[11px]">
+                          Flip X
+                        </button>
+                        <button type="button" onClick={() => updateSelectedLayer({ flipY: !selectedImageLayer.flipY } as Partial<CanvasImageLayer>, 'Flip vertical')} className="btn-secondary py-2 text-[11px]">
+                          Flip Y
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <NumberField label="Bright" value={selectedImageLayer.brightness || 0} min={-100} max={100} onChange={(value) => updateSelectedLayer({ brightness: value } as Partial<CanvasImageLayer>, 'Image brightness')} />
+                        <NumberField label="Contrast" value={selectedImageLayer.contrast || 0} min={-100} max={100} onChange={(value) => updateSelectedLayer({ contrast: value } as Partial<CanvasImageLayer>, 'Image contrast')} />
+                        <NumberField label="Saturation" value={selectedImageLayer.saturation || 0} min={-100} max={100} onChange={(value) => updateSelectedLayer({ saturation: value } as Partial<CanvasImageLayer>, 'Image saturation')} />
+                      </div>
+                    </div>
+                  )}
 
                   {selectedLayer.type === 'text' && (
                     <div className="space-y-3 border-t border-[var(--color-border)] pt-4">

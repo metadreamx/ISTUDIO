@@ -7,6 +7,8 @@ export interface ImageState {
   fileName: string | null;
   base64: string | null;
   mimeType: string | null;
+  width?: number | null;
+  height?: number | null;
 }
 
 export interface ImageTransferState {
@@ -22,6 +24,11 @@ export interface Project {
   lastModified: number;
   state: any; // Stores the full project state
   generatedImages: string[]; // Added this
+  summary?: {
+    isSummary: boolean;
+    outputCount: number;
+    canvasDocumentCount: number;
+  };
 }
 
 // --- Canvas Tool ---
@@ -30,6 +37,14 @@ export type CanvasTool = 'select' | 'image' | 'text' | 'shape' | 'brush' | 'hand
 export type CanvasPanel = 'templates' | 'assets' | 'layers' | 'properties' | 'ai' | 'history';
 export type CanvasExportFormat = 'png' | 'jpeg' | 'webp';
 export type CanvasLayerType = 'image' | 'text' | 'shape' | 'brush' | 'group' | 'mask' | 'adjustment' | 'reference' | 'ai-result';
+export type CanvasImageFitMode = 'fit' | 'fill' | 'crop' | 'stretch';
+
+export interface CanvasImageCrop {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 export interface CanvasAsset {
   id: string;
@@ -66,6 +81,15 @@ export interface CanvasLayerBase {
 export interface CanvasImageLayer extends CanvasLayerBase {
   type: 'image' | 'reference' | 'ai-result';
   source: ImageState;
+  fitMode?: CanvasImageFitMode;
+  crop?: CanvasImageCrop | null;
+  naturalWidth?: number | null;
+  naturalHeight?: number | null;
+  flipX?: boolean;
+  flipY?: boolean;
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
 }
 
 export interface CanvasTextLayer extends CanvasLayerBase {

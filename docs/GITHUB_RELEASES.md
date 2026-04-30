@@ -6,15 +6,15 @@ ISTUDIO ships as a simple Windows launcher plus a self-contained app package. Us
 
 Each GitHub Release should expose only one ISTUDIO asset:
 
-- `LAUNCH-ISTUDIO.bat`
+- `INSTALL-ISTUDIO.bat`
 
-GitHub automatically adds the source-code downloads. Tell users to download `LAUNCH-ISTUDIO.bat`, move it to the folder where they want ISTUDIO installed, then double-click it. The launcher creates an `ISTUDIO` folder beside the BAT, installs or repairs the app there, then starts ISTUDIO in one run. Users can open the maintenance menu with `LAUNCH-ISTUDIO.bat menu`.
+GitHub automatically adds the source-code downloads. Tell users to download `INSTALL-ISTUDIO.bat`, move it to the folder where they want ISTUDIO installed, then double-click it. The installer creates an `ISTUDIO` folder beside the BAT, installs or repairs the app there, then starts ISTUDIO in one run. Users can open the maintenance menu with `LAUNCH ISTUDIO.bat menu` inside the installed app folder.
 
-Users should not use GitHub's **Code > Download ZIP** button. The only supported install path is `LAUNCH-ISTUDIO.bat` from GitHub Releases.
+Users should not use GitHub's **Code > Download ZIP** button. The only supported install path is `INSTALL-ISTUDIO.bat` from GitHub Releases.
 
 ## What The Package Contains
 
-The self-contained `LAUNCH-ISTUDIO.bat` embeds an internal app package containing:
+The self-contained `INSTALL-ISTUDIO.bat` embeds an internal app package containing:
 
 - `runtime/node/node.exe`
 - `runtime/node/npm.cmd`
@@ -31,7 +31,7 @@ The setup screen extracts and validates these files before starting ISTUDIO.
 The launcher installs ISTUDIO beside the BAT:
 
 ```text
-<folder with LAUNCH-ISTUDIO.bat>\ISTUDIO
+<folder with INSTALL-ISTUDIO.bat>\ISTUDIO
 ```
 
 It preserves:
@@ -44,4 +44,4 @@ The installed launcher can also check for updates and replace the app with the n
 
 ## User Support
 
-If install or launch fails, ask the user to download the latest `LAUNCH-ISTUDIO.bat` from GitHub Releases and run it again.
+If install or launch fails, ask the user to download the latest `INSTALL-ISTUDIO.bat` from GitHub Releases and run it again.

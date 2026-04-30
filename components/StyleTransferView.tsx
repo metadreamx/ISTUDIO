@@ -362,11 +362,9 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       if (base64 && mimeType) {
         // Skip analysis if we already have a checklist for this image (e.g. on project load, or replaying the same reference)
         if (checklist.length > 0 && sceneBlueprint && referenceImage.base64 === lastAnalyzedRefBase64.current) {
-            console.log("Reference image already matches current analysis, skipping...");
             return;
         }
 
-        console.log("Starting reference image analysis...");
         setIsAnalyzing(true);
         setError(null);
         setChecklist([]);
@@ -381,10 +379,8 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
           ]);
           
           if (isCancelled) return;
-
-          const [items, color, blueprint] = results;
           
-          console.log("Analysis complete. Items found:", items.length);
+          const [items, color, blueprint] = results;
 
           const itemsWithIntensity = items.map(category => ({
             ...category,
