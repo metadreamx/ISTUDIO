@@ -69,6 +69,10 @@ Projects are saved inside the installed ISTUDIO folder:
 
 Each project gets its own folder with reference images, target photos, generated outputs, Canvas assets, exports, saved settings, and generation history. Project data stays on the user's computer.
 
+### Moving Projects Between Computers
+
+To move work to another computer, copy the project folder into the new computer's `ISTUDIO\projects` folder, then restart ISTUDIO. Imported project folders can be placed directly inside `projects` or inside another folder under `projects`; ISTUDIO scans for `project.json` files and lists them automatically.
+
 ## Updates
 
 ISTUDIO updates are published through GitHub Releases.

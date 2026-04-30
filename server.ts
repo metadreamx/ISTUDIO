@@ -11,6 +11,15 @@ const __dirname = path.dirname(__filename);
 const PROJECTS_DIR = path.resolve(process.env.ISTUDIO_PROJECTS_DIR || path.join(process.cwd(), 'projects'));
 const PROJECT_JSON = 'project.json';
 const PROJECT_PAYLOAD_LIMIT = process.env.ISTUDIO_PROJECT_PAYLOAD_LIMIT || '2gb';
+const PROJECT_SCAN_MAX_DEPTH = 6;
+const PROJECT_SCAN_IGNORED_DIRS = new Set([
+  '.git',
+  '.istudio-setup-temp',
+  'dist',
+  'dist-server',
+  'node_modules',
+  'runtime',
+]);
 
 type StoredProject = {
   id: string;
@@ -121,6 +130,61 @@ function resolveProjectPath(projectDir: string, relativePath: string): string {
   return absolutePath;
 }
 
+function isInsideDirectory(parentDir: string, childPath: string): boolean {
+  const parent = path.resolve(parentDir);
+  const child = path.resolve(childPath);
+  return child === parent || child.startsWith(`${parent}${path.sep}`);
+}
+
+async function findProjectAssetByName(directory: string, fileName: string, depth = 0): Promise<string | null> {
+  if (!fileName || depth > PROJECT_SCAN_MAX_DEPTH) return null;
+
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  const normalizedFileName = fileName.toLowerCase();
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.toLowerCase() === normalizedFileName) {
+      return path.join(directory, entry.name);
+    }
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || PROJECT_SCAN_IGNORED_DIRS.has(entry.name.toLowerCase())) continue;
+    const match = await findProjectAssetByName(path.join(directory, entry.name), fileName, depth + 1);
+    if (match) return match;
+  }
+
+  return null;
+}
+
+async function resolvePortableProjectAsset(projectDir: string, storedPath: string): Promise<string | null> {
+  const pathValue = storedPath.replace(/^file:\/+/i, '').trim();
+  if (!pathValue) return null;
+
+  try {
+    if (path.isAbsolute(pathValue)) {
+      if (isInsideDirectory(projectDir, pathValue) && existsSync(pathValue)) {
+        return pathValue;
+      }
+    } else {
+      const relativeAssetPath = resolveProjectPath(projectDir, pathValue.replace(/\\/g, '/'));
+      if (existsSync(relativeAssetPath)) {
+        return relativeAssetPath;
+      }
+    }
+  } catch {
+    // Imported projects may contain absolute paths from another computer. Fall back to filename lookup.
+  }
+
+  const fileName = pathValue.split(/[\\/]/).filter(Boolean).at(-1);
+  return fileName ? findProjectAssetByName(projectDir, fileName) : null;
+}
+
 async function ensureProjectsDir() {
   await fs.mkdir(PROJECTS_DIR, { recursive: true });
 }
@@ -144,12 +208,33 @@ async function ensureProjectAssetDirs(projectDir: string) {
   ]);
 }
 
+async function findProjectJsonDirectories(directory: string, depth = 0): Promise<string[]> {
+  if (depth > PROJECT_SCAN_MAX_DEPTH) return [];
+
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  if (entries.some((entry) => entry.isFile() && entry.name.toLowerCase() === PROJECT_JSON)) {
+    return [directory];
+  }
+
+  const nested = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && !PROJECT_SCAN_IGNORED_DIRS.has(entry.name.toLowerCase()))
+      .map((entry) => findProjectJsonDirectories(path.join(directory, entry.name), depth + 1)),
+  );
+
+  return nested.flat();
+}
+
 async function projectDirectories(): Promise<string[]> {
   await ensureProjectsDir();
-  const entries = await fs.readdir(PROJECTS_DIR, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(PROJECTS_DIR, entry.name));
+  const directories = await findProjectJsonDirectories(PROJECTS_DIR);
+  return Array.from(new Set(directories)).filter((directory) => isInsideDirectory(PROJECTS_DIR, directory));
 }
 
 async function legacyProjectFiles(): Promise<string[]> {
@@ -163,7 +248,7 @@ async function legacyProjectFiles(): Promise<string[]> {
 async function readRawProjectFile(filePath: string): Promise<StoredProject | null> {
   try {
     const raw = await fs.readFile(filePath, 'utf8');
-    const project = JSON.parse(raw) as StoredProject;
+    const project = JSON.parse(raw.replace(/^\uFEFF/, '')) as StoredProject;
     if (!project || typeof project.id !== 'string') return null;
     return project;
   } catch (error) {
@@ -178,16 +263,24 @@ async function hydrateValue(value: unknown, projectDir: string): Promise<unknown
   }
 
   if (isStoredAssetReference(value)) {
-    const assetPath = resolveProjectPath(projectDir, value.path);
+    const assetPath = await resolvePortableProjectAsset(projectDir, value.path);
+    if (!assetPath) {
+      console.warn(`Missing imported project asset: ${path.join(projectDir, value.path)}`);
+      return '';
+    }
     const base64 = await fs.readFile(assetPath, 'base64');
     return `data:${value.mimeType};base64,${base64}`;
   }
 
   if (isImageState(value)) {
     if (value.assetPath && value.mimeType) {
-      const assetPath = resolveProjectPath(projectDir, value.assetPath);
-      const base64 = await fs.readFile(assetPath, 'base64');
+      const assetPath = await resolvePortableProjectAsset(projectDir, value.assetPath);
       const { assetPath: _assetPath, ...imageState } = value;
+      if (!assetPath) {
+        console.warn(`Missing imported project image: ${path.join(projectDir, value.assetPath)}`);
+        return { ...imageState, base64: null };
+      }
+      const base64 = await fs.readFile(assetPath, 'base64');
       return { ...imageState, base64 };
     }
     return value;
