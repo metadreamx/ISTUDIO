@@ -53,7 +53,7 @@ function Test-IStudioInstall {
   param([string]$Path)
 
   $required = @(
-    "LAUNCH ISTUDIO.bat",
+    "LAUNCH.bat",
     "package.json",
     "dist-server\server.js",
     "dist\index.html",
@@ -200,7 +200,7 @@ function New-IStudioShortcut {
     }
 
     $shortcutPath = Join-Path $desktop "ISTUDIO.lnk"
-    $launcherBat = Join-Path $InstallDir "LAUNCH ISTUDIO.bat"
+    $launcherBat = Join-Path $InstallDir "LAUNCH.bat"
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $launcherBat

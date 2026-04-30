@@ -261,11 +261,11 @@ const App: React.FC = () => {
         setProjects(dbProjects);
         setProjectStorageInfo(storageInfo);
         if (!storageInfo) {
-          setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH ISTUDIO.bat.");
+          setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH.bat.");
         }
       } catch (e) {
         console.error("Failed to load project folder data", e);
-        setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH ISTUDIO.bat.");
+        setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH.bat.");
       } finally {
         setIsLoading(false);
       }
@@ -279,7 +279,7 @@ const App: React.FC = () => {
 
   const createProject = useCallback(async (name: string, nextView: AppView = 'style-transfer', initialState: Project['state'] = {}): Promise<Project | null> => {
     if (!projectStorageInfo) {
-      setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH ISTUDIO.bat.");
+      setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH.bat.");
       return null;
     }
     const newProject: Project = {

@@ -70,7 +70,7 @@ async function apiRequest<T>(url: string, init?: RequestInit, timeoutMs = 30000)
         }
         const contentType = response.headers.get('content-type') || '';
         if (!contentType.includes('application/json')) {
-            throw new Error('Project storage server is not running. Restart ISTUDIO with LAUNCH ISTUDIO.bat.');
+            throw new Error('Project storage server is not running. Restart ISTUDIO with LAUNCH.bat.');
         }
         return await response.json() as T;
     } finally {

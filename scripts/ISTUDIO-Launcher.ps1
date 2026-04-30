@@ -239,7 +239,7 @@ function Assert-IStudioPackage {
   param([string]$PackageRoot)
 
   $requiredPaths = @(
-    "LAUNCH ISTUDIO.bat",
+    "LAUNCH.bat",
     "package.json",
     "dist-server\server.js",
     "dist\index.html",
@@ -321,7 +321,7 @@ function Assert-IStudioPackage {
   param([string]$PackageRoot)
 
   $requiredPaths = @(
-    "LAUNCH ISTUDIO.bat",
+    "LAUNCH.bat",
     "package.json",
     "dist-server\server.js",
     "dist\index.html",
@@ -370,7 +370,7 @@ try {
   Write-Host "ISTUDIO has been updated." -ForegroundColor Green
   Write-Host "Launching the updated app..."
   Start-Sleep -Seconds 1
-  $launcherBat = Join-Path $InstallDir "LAUNCH ISTUDIO.bat"
+  $launcherBat = Join-Path $InstallDir "LAUNCH.bat"
   Remove-SetupRoot
   Start-Process -FilePath $launcherBat -WorkingDirectory $InstallDir
 } catch {
@@ -566,7 +566,7 @@ function Assert-InstalledReleasePackage {
   $requiredPaths = @(
     "runtime\node\node.exe",
     "runtime\node\npm.cmd",
-    "LAUNCH ISTUDIO.bat",
+    "LAUNCH.bat",
     "node_modules",
     "dist-server\server.js",
     "dist\index.html",

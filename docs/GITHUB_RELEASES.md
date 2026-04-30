@@ -8,7 +8,7 @@ Each GitHub Release should expose only one ISTUDIO asset:
 
 - `INSTALL-ISTUDIO.bat`
 
-GitHub automatically adds the source-code downloads. Tell users to download `INSTALL-ISTUDIO.bat`, move it to the folder where they want ISTUDIO installed, then double-click it. The installer creates an `ISTUDIO` folder beside the BAT, installs or repairs the app there, then starts ISTUDIO in one run. Users can open the maintenance menu with `LAUNCH ISTUDIO.bat menu` inside the installed app folder.
+GitHub automatically adds the source-code downloads. Tell users to download `INSTALL-ISTUDIO.bat`, move it to the folder where they want ISTUDIO installed, then double-click it. The installer creates an `ISTUDIO` folder beside the BAT, installs or repairs the app there, then starts ISTUDIO in one run. Users can open the maintenance menu with `LAUNCH.bat menu` inside the installed app folder.
 
 Users should not use GitHub's **Code > Download ZIP** button. The only supported install path is `INSTALL-ISTUDIO.bat` from GitHub Releases.
 
@@ -22,7 +22,7 @@ The self-contained `INSTALL-ISTUDIO.bat` embeds an internal app package containi
 - `dist/index.html`
 - `dist-server/server.js`
 - `scripts/ISTUDIO-Launcher.ps1`
-- `LAUNCH ISTUDIO.bat`
+- `LAUNCH.bat`
 
 The setup screen extracts and validates these files before starting ISTUDIO.
 

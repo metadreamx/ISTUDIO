@@ -40,7 +40,7 @@ The app will ask for the key when it is needed. The key stays on the user's comp
 
 ## Use ISTUDIO
 
-1. Open the desktop shortcut or `LAUNCH ISTUDIO.bat` inside the installed ISTUDIO folder.
+1. Open the desktop shortcut or `LAUNCH.bat` inside the installed ISTUDIO folder.
 2. The launcher checks for updates automatically.
 3. If a newer version is available, ISTUDIO updates first, then opens.
 4. Add your Google API key when prompted.
@@ -50,7 +50,7 @@ The app will ask for the key when it is needed. The key stays on the user's comp
 To open the maintenance menu, run:
 
 ```powershell
-& ".\LAUNCH ISTUDIO.bat" menu
+& ".\LAUNCH.bat" menu
 ```
 
 The menu includes:
@@ -87,6 +87,6 @@ Updates preserve:
 ## Troubleshooting
 
 - If Windows blocks the BAT file, choose **More info > Run anyway** only if you downloaded it from this official GitHub Releases page.
-- If ISTUDIO does not open, close any old ISTUDIO launcher windows and run `LAUNCH ISTUDIO.bat` again.
+- If ISTUDIO does not open, close any old ISTUDIO launcher windows and run `LAUNCH.bat` again.
 - If you want to install somewhere else, move `INSTALL-ISTUDIO.bat` to that folder before running it.
 - If update checking fails because the computer is offline, ISTUDIO will still launch the installed version.

@@ -98,7 +98,7 @@ function Assert-ReleasePackage {
   )
 
   $requiredPaths = @(
-    "LAUNCH ISTUDIO.bat",
+    "LAUNCH.bat",
     "package.json",
     "dist-server\server.js",
     "dist\index.html",
@@ -153,7 +153,6 @@ try {
   New-Item -ItemType Directory -Force -Path $appStage, $releaseDir | Out-Null
 
   $items = @(
-    "LAUNCH ISTUDIO.bat",
     "README.md",
     "docs\assets",
     "dist",
@@ -165,6 +164,7 @@ try {
   foreach ($item in $items) {
     Copy-RequiredItem -Name $item -Root $root -Destination $appStage
   }
+  Copy-Item -LiteralPath (Join-Path $root "LAUNCH ISTUDIO.bat") -Destination (Join-Path $appStage "LAUNCH.bat") -Force
   Write-ReleasePackageJson -Root $root -Destination $appStage
   if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
     $releasePackage = Get-Content -LiteralPath (Join-Path $appStage "package.json") -Raw | ConvertFrom-Json

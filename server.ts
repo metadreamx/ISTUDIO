@@ -631,7 +631,7 @@ async function startServer() {
 
   server.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'EADDRINUSE') {
-      console.error(`Port ${PORT} is already in use. Close the old ISTUDIO launcher window, then run LAUNCH ISTUDIO.bat again.`);
+      console.error(`Port ${PORT} is already in use. Close the old ISTUDIO launcher window, then run LAUNCH.bat again.`);
     } else {
       console.error('Failed to start ISTUDIO server', error);
     }
