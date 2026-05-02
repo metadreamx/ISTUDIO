@@ -18,6 +18,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@google/genai": "^1.16.0",
     "@tailwindcss/vite": "^4.2.2",
+    "chokidar": "^4.0.3",
     "express": "^5.2.1",
     "jszip": "^3.10.1",
     "konva": "^10.2.5",
@@ -28,8 +29,7 @@
     "react-konva": "^19.2.3",
     "react-zoom-pan-pinch": "^3.6.0",
     "tailwindcss": "^4.2.2",
-    "tsx": "^4.21.0",
-    "uuid": "^10.0.0"
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

@@ -1,4 +1,4 @@
-import type { HistoryItem, Project } from '../types';
+import type { HistoryItem, Project, TetherStatus } from '../types';
 
 const DB_NAME = 'StyleTransferDB';
 const DB_VERSION = 3; // Incremented version to add twins store
@@ -6,6 +6,7 @@ const STORE_NAME = 'history';
 const PROJECTS_STORE = 'projects';
 const PROJECTS_API = '/api/projects';
 const PROJECTS_FOLDER_API = '/api/projects-folder';
+const TETHER_API = '/api/tether';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -166,6 +167,38 @@ export async function openProjectsFolder(): Promise<void> {
     await apiRequest<{ ok: boolean }>(`${PROJECTS_FOLDER_API}/open`, {
         method: 'POST',
     });
+}
+
+export async function getTetherStatus(options: { includeImages?: boolean; knownCaptureIds?: string[] } = {}): Promise<TetherStatus> {
+    const params = new URLSearchParams();
+    if (options.includeImages) params.set('includeImages', '1');
+    if (options.knownCaptureIds?.length) params.set('known', options.knownCaptureIds.join(','));
+    const query = params.toString();
+    return await apiRequest<TetherStatus>(`${TETHER_API}/status${query ? `?${query}` : ''}`, undefined, 10000);
+}
+
+export async function selectTetherFolder(): Promise<string | null> {
+    const result = await apiRequest<{ path: string | null }>(`${TETHER_API}/folder-picker`, {
+        method: 'POST',
+    }, 125000);
+    return result.path;
+}
+
+export async function startTetherSession(input: {
+    folderPath: string;
+    projectId: string;
+    autoEdit: boolean;
+}): Promise<TetherStatus> {
+    return await apiRequest<TetherStatus>(`${TETHER_API}/start`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+    }, 30000);
+}
+
+export async function stopTetherSession(): Promise<TetherStatus> {
+    return await apiRequest<TetherStatus>(`${TETHER_API}/stop`, {
+        method: 'POST',
+    }, 30000);
 }
 
 async function getIndexedDbProjects(): Promise<Project[]> {

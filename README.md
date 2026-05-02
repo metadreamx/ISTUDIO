@@ -7,6 +7,7 @@ ISTUDIO is a Windows-first creative app for reference-based photo editing and ca
 ## What ISTUDIO Does
 
 - **Reference Edit**: edit target photos from the lighting, background, mood, color, and style DNA of a reference image.
+- **Tethered Mode**: watch a camera capture folder and import new photos into a Reference Edit project automatically.
 - **Canvas**: create single-page designs with editable image, text, shape, brush, template, and AI result layers.
 - **Local projects**: save references, targets, generations, Canvas documents, exports, and settings in project folders on your computer.
 - **Automatic updates**: the launcher checks GitHub Releases every time ISTUDIO starts.
@@ -46,6 +47,12 @@ The app will ask for the key when it is needed. The key stays on the user's comp
 4. Add your Google API key when prompted.
 5. Choose **Reference Edit** or **Canvas**.
 6. Create, save, refine, and export your work.
+
+### Tethered Mode
+
+Tethered Mode is inside **Reference Edit**. Use your camera brand's tethering software, Lightroom, Capture One, or another capture app to save new photos into a folder. In ISTUDIO, open **Tethered Mode**, choose that folder, pick the current project or a new session project, then start watching.
+
+New photos are imported and saved immediately. Turn on **Auto Edit** when a reference image and DNA controls are ready, and incoming shots will queue for editing automatically. For best results, configure your tether software to save JPEG, PNG, WebP, or TIFF files; RAW files are ignored until they are converted by the capture software.
 
 To open the maintenance menu, run:
 

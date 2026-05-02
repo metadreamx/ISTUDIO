@@ -1,11 +1,13 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import type { ImageState, StyleCategory, HistoryItem, BatchImage, CustomClothingItem, CustomAccessoryItem, CustomFaceItem, CustomBackgroundItem, CustomSkyItem, AspectRatio, Project } from '../types';
+import { AlertCircleIcon, CameraIcon, FolderOpenIcon, PlayIcon, RadioIcon, RefreshCwIcon, SquareIcon as StopIcon } from 'lucide-react';
+import type { ImageState, StyleCategory, HistoryItem, BatchImage, CustomClothingItem, CustomAccessoryItem, CustomFaceItem, CustomBackgroundItem, CustomSkyItem, AspectRatio, Project, TetherCapture, TetherProjectState, TetherStatus } from '../types';
 import { ImageUploader } from './ImageUploader';
 import { MainPanel } from './MainPanel';
 import { StyleChecklist } from './StyleChecklist';
 import { analyzeTargetImageDetails, editImage, detectTransferableElements, analyzeClothingImage, analyzeAccessoryImage, analyzeFaceImage, analyzeBackgroundImage, analyzeSkyImage, analyzeReferenceScene } from '../services/geminiService';
+import { getTetherStatus, selectTetherFolder, startTetherSession, stopTetherSession } from '../services/db';
 import { SparklesIcon, XCircleIcon, CheckIcon, LockIcon, AdjustmentsHorizontalIcon, HistoryIcon, DownloadIcon, ChevronDownIcon } from '@/components/icons';
 
 // Utility function to get dominant color from an image
@@ -64,6 +66,7 @@ type GenerationStatus = 'idle' | 'analyzing_target' | 'generating' | 'saving';
 interface StyleTransferViewProps {
     project: Project | null;
     onUpdateProject: (project: Project) => void;
+    onCreateProject?: (name: string, initialState?: Project['state']) => Promise<Project | null>;
     referenceTemplate?: ImageState | null;
     onReferenceTemplateConsumed?: () => void;
 }
@@ -112,7 +115,7 @@ const compactHistoryForSave = (history: HistoryItem[], fallbackReference: ImageS
     reference: compactHistoryImage(item.reference, fallbackReference.fileName),
   }));
 
-export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, onUpdateProject, referenceTemplate, onReferenceTemplateConsumed }) => {
+export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, onUpdateProject, onCreateProject, referenceTemplate, onReferenceTemplateConsumed }) => {
   const [referenceImage, setReferenceImage] = useState<ImageState>(createEmptyImage());
   const [targetImages, setTargetImages] = useState<BatchImage[]>([]);
   const [generationHistory, setGenerationHistory] = useState<HistoryItem[]>([]);
@@ -134,6 +137,13 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(new Set());
+  const [tetherStatus, setTetherStatus] = useState<TetherStatus | null>(null);
+  const [tetherFolderPath, setTetherFolderPath] = useState('');
+  const [tetherAutoEdit, setTetherAutoEdit] = useState(false);
+  const [tetherProjectMode, setTetherProjectMode] = useState<'current' | 'new'>(project ? 'current' : 'new');
+  const [isTetherPanelOpen, setIsTetherPanelOpen] = useState(false);
+  const [isTetherBusy, setIsTetherBusy] = useState(false);
+  const importedTetherCaptureIdsRef = useRef<Set<string>>(new Set());
 
   // State for custom clothing feature
   const [customClothingItems, setCustomClothingItems] = useState({
@@ -158,6 +168,28 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
   // State for custom sky feature
   const [customSkyItem, setCustomSkyItem] = useState(createInitialSkyItem());
+
+  const hasReadyGenerationInstructions = useCallback(() => {
+    const hasSelectedCategory = checklist.some((category) =>
+      category.intensity > 0 && (category.items.some((item) => item.checked) || Boolean(category.customPrompt)),
+    );
+    const hasCustomClothing = [...customClothingItems.man, ...customClothingItems.woman].some((item) => item.enabled && item.status === 'ready');
+    const hasCustomAccessory = [...customAccessoryItems.man, ...customAccessoryItems.woman].some((item) => item.enabled && item.status === 'ready');
+    const hasCustomFace = [customFaceItems.man, customFaceItems.woman].some((item) => item.enabled && item.status === 'ready');
+    const hasCustomBackground = customBackgroundItem.enabled && customBackgroundItem.status === 'ready';
+    const hasCustomSky = customSkyItem.enabled && customSkyItem.status === 'ready';
+
+    return hasSelectedCategory || hasCustomClothing || hasCustomAccessory || hasCustomFace || hasCustomBackground || hasCustomSky;
+  }, [
+    checklist,
+    customAccessoryItems,
+    customBackgroundItem,
+    customClothingItems,
+    customFaceItems,
+    customSkyItem,
+  ]);
+
+  const canAutoQueueTether = Boolean(referenceImage.base64 && referenceImage.mimeType && !isAnalyzing && hasReadyGenerationInstructions());
 
   // Load project state
   useEffect(() => {
@@ -226,6 +258,11 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     setSessionSeed(typeof state.sessionSeed === 'number' ? state.sessionSeed : null);
     setAnchorImageId(typeof state.anchorImageId === 'string' ? state.anchorImageId : null);
     setSelectedImageIds(new Set());
+    const tetherState: TetherProjectState = state.tether || {};
+    setTetherFolderPath(typeof tetherState.folderPath === 'string' ? tetherState.folderPath : '');
+    setTetherAutoEdit(Boolean(tetherState.autoEdit));
+    setTetherProjectMode(project ? 'current' : 'new');
+    importedTetherCaptureIdsRef.current = new Set(Array.isArray(tetherState.importedCaptureIds) ? tetherState.importedCaptureIds : []);
     setIsGenerationHistoryOpen(false);
     setGenerationStatus('idle');
     setError(null);
@@ -272,6 +309,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     sessionSeed: number | null;
     anchorImageId: string | null;
     generationHistory: HistoryItem[];
+    tether: TetherProjectState;
   }> = {}): Project | null => {
     if (!project) return null;
 
@@ -308,6 +346,12 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         sessionSeed: overrides.sessionSeed ?? sessionSeed,
         anchorImageId: overrides.anchorImageId ?? anchorImageId,
         generationHistory: compactGenerationHistory,
+        tether: overrides.tether ?? {
+          folderPath: tetherFolderPath || undefined,
+          autoEdit: tetherAutoEdit,
+          importedCaptureIds: Array.from(importedTetherCaptureIdsRef.current),
+          activeSessionStartedAt: tetherStatus?.projectId === project.id ? tetherStatus.startedAt : null,
+        },
       },
     };
   }, [
@@ -326,6 +370,10 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     sessionSeed,
     anchorImageId,
     generationHistory,
+    tetherFolderPath,
+    tetherAutoEdit,
+    tetherStatus?.projectId,
+    tetherStatus?.startedAt,
   ]);
 
   const saveProjectNow = useCallback((overrides: Parameters<typeof buildProjectSnapshot>[0] = {}) => {
@@ -402,6 +450,252 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     saveProjectNow({ targetImages: updatedImages });
 
   }, [saveProjectNow, targetImages]);
+
+  const buildTetherState = useCallback((overrides: Partial<TetherProjectState> = {}): TetherProjectState => ({
+    folderPath: (overrides.folderPath ?? tetherFolderPath) || undefined,
+    autoEdit: overrides.autoEdit ?? tetherAutoEdit,
+    importedCaptureIds: overrides.importedCaptureIds ?? Array.from(importedTetherCaptureIdsRef.current),
+    activeSessionStartedAt: overrides.activeSessionStartedAt ?? (tetherStatus?.projectId === project?.id ? tetherStatus.startedAt : null),
+  }), [project?.id, tetherAutoEdit, tetherFolderPath, tetherStatus?.projectId, tetherStatus?.startedAt]);
+
+  const buildStateForNewTetherProject = useCallback((tether: TetherProjectState) => ({
+    referenceImage,
+    targetImages: [],
+    checklist,
+    sceneBlueprint,
+    accentColor,
+    aspectRatio,
+    customClothingItems,
+    customAccessoryItems,
+    customFaceItems,
+    customBackgroundItem,
+    customSkyItem,
+    sessionSeed,
+    anchorImageId: null,
+    generationHistory: [],
+    tether,
+  }), [
+    accentColor,
+    aspectRatio,
+    checklist,
+    customAccessoryItems,
+    customBackgroundItem,
+    customClothingItems,
+    customFaceItems,
+    customSkyItem,
+    referenceImage,
+    sceneBlueprint,
+    sessionSeed,
+  ]);
+
+  const refreshTetherStatus = useCallback(async () => {
+    try {
+      setTetherStatus(await getTetherStatus({
+        includeImages: true,
+        knownCaptureIds: Array.from(importedTetherCaptureIdsRef.current).slice(-120),
+      }));
+    } catch (error) {
+      console.warn('Could not refresh Tethered Mode status.', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshTetherStatus();
+    const timer = window.setInterval(refreshTetherStatus, 1500);
+    return () => window.clearInterval(timer);
+  }, [refreshTetherStatus]);
+
+  const handlePickTetherFolder = useCallback(async () => {
+    setIsTetherBusy(true);
+    try {
+      const folderPath = await selectTetherFolder();
+      if (folderPath) {
+        setTetherFolderPath(folderPath);
+        saveProjectNow({ tether: buildTetherState({ folderPath }) });
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Could not open the folder picker. Paste the folder path manually.');
+    } finally {
+      setIsTetherBusy(false);
+    }
+  }, [buildTetherState, saveProjectNow]);
+
+  const handleStartTether = useCallback(async () => {
+    const folderPath = tetherFolderPath.trim();
+    if (!folderPath) {
+      setError('Choose the folder where your camera software saves new photos.');
+      return;
+    }
+
+    setIsTetherBusy(true);
+    setError(null);
+    try {
+      const tether = buildTetherState({
+        folderPath,
+        autoEdit: tetherAutoEdit,
+        importedCaptureIds: Array.from(importedTetherCaptureIdsRef.current),
+      });
+      let targetProject = project;
+
+      if (tetherProjectMode === 'new' || !targetProject) {
+        if (!onCreateProject) {
+          throw new Error('Create or open a project before starting Tethered Mode.');
+        }
+        const timeLabel = new Date().toLocaleString([], {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        });
+        targetProject = await onCreateProject(`Tethered Session ${timeLabel}`, buildStateForNewTetherProject(tether));
+        if (!targetProject) {
+          throw new Error('Could not create the tethered session project.');
+        }
+      } else {
+        saveProjectNow({ tether });
+      }
+
+      const status = await startTetherSession({
+        folderPath,
+        projectId: targetProject.id,
+        autoEdit: tetherAutoEdit,
+      });
+      setTetherStatus(status);
+      setIsTetherPanelOpen(true);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to start Tethered Mode.');
+    } finally {
+      setIsTetherBusy(false);
+    }
+  }, [
+    buildStateForNewTetherProject,
+    buildTetherState,
+    onCreateProject,
+    project,
+    saveProjectNow,
+    tetherAutoEdit,
+    tetherFolderPath,
+    tetherProjectMode,
+  ]);
+
+  const handleStopTether = useCallback(async () => {
+    setIsTetherBusy(true);
+    try {
+      setTetherStatus(await stopTetherSession());
+      if (project) {
+        saveProjectNow({ tether: buildTetherState({ activeSessionStartedAt: null }) });
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to stop Tethered Mode.');
+    } finally {
+      setIsTetherBusy(false);
+    }
+  }, [buildTetherState, project, saveProjectNow]);
+
+  const handleTetherAutoEditChange = useCallback(async (enabled: boolean) => {
+    setTetherAutoEdit(enabled);
+    const nextTether = buildTetherState({ autoEdit: enabled });
+    saveProjectNow({ tether: nextTether });
+
+    if (tetherStatus?.isWatching && tetherStatus.folderPath && tetherStatus.projectId === project?.id) {
+      try {
+        setTetherStatus(await startTetherSession({
+          folderPath: tetherStatus.folderPath,
+          projectId: tetherStatus.projectId,
+          autoEdit: enabled,
+        }));
+      } catch (error) {
+        setError(error instanceof Error ? error.message : 'Could not update Tethered Mode.');
+      }
+    }
+  }, [buildTetherState, project?.id, saveProjectNow, tetherStatus?.folderPath, tetherStatus?.isWatching, tetherStatus?.projectId]);
+
+  useEffect(() => {
+    if (!project?.id || !tetherStatus?.captures.length) return;
+
+    const newCaptures = tetherStatus.captures.filter((capture) =>
+      capture.projectId === project.id &&
+      capture.status === 'imported' &&
+      capture.image?.base64 &&
+      capture.image.mimeType &&
+      !importedTetherCaptureIdsRef.current.has(capture.id),
+    );
+    if (newCaptures.length === 0) return;
+
+    let isCancelled = false;
+
+    const ingest = async () => {
+      const newBatchImages: BatchImage[] = await Promise.all(newCaptures.map(async (capture) => {
+        const image = capture.image!;
+        const dominantColor = image.base64 && image.mimeType
+          ? await getDominantColor(image.base64, image.mimeType).catch(() => null)
+          : null;
+        return {
+          id: `tether-${capture.id}`,
+          target: {
+            fileName: image.fileName || capture.fileName,
+            base64: image.base64,
+            mimeType: image.mimeType,
+            width: image.width ?? null,
+            height: image.height ?? null,
+          },
+          generated: null,
+          status: (tetherAutoEdit && canAutoQueueTether ? 'queued' : 'pending') as BatchImage['status'],
+          dominantColor,
+          source: 'tether',
+          tetherCaptureId: capture.id,
+        };
+      }));
+
+      if (isCancelled) return;
+
+      newCaptures.forEach((capture) => importedTetherCaptureIdsRef.current.add(capture.id));
+      setTargetImages((prev) => {
+        const existingIds = new Set(prev.map((image) => image.id));
+        const freshImages = newBatchImages.filter((image) => !existingIds.has(image.id));
+        if (freshImages.length === 0) return prev;
+
+        const updatedImages = [...prev, ...freshImages];
+        if (prev.length === 0) {
+          setActiveImageIndex(0);
+        }
+        saveProjectNow({
+          targetImages: updatedImages,
+          tether: buildTetherState({ importedCaptureIds: Array.from(importedTetherCaptureIdsRef.current) }),
+        });
+        return updatedImages;
+      });
+
+      if (tetherAutoEdit && !canAutoQueueTether) {
+        setError('Tethered photos are importing. Add a reference image and select at least one DNA control to begin auto editing.');
+      }
+    };
+
+    ingest();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [buildTetherState, canAutoQueueTether, project?.id, saveProjectNow, tetherAutoEdit, tetherStatus?.captures]);
+
+  useEffect(() => {
+    if (!tetherAutoEdit || !canAutoQueueTether) return;
+
+    setTargetImages((prev) => {
+      let changed = false;
+      const updatedImages = prev.map((image) => {
+        if (image.source === 'tether' && image.status === 'pending') {
+          changed = true;
+          return { ...image, status: 'queued' as const };
+        }
+        return image;
+      });
+      if (changed) {
+        saveProjectNow({ targetImages: updatedImages });
+      }
+      return changed ? updatedImages : prev;
+    });
+  }, [canAutoQueueTether, saveProjectNow, tetherAutoEdit]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1268,6 +1562,27 @@ Before outputting, verify:
   // This allows switching to other images and queuing them up.
   const isControlsLocked = activeTargetIsProcessing || isAnalyzing;
   const selectedCount = selectedImageIds.size;
+  const isTetherWatchingThisProject = Boolean(tetherStatus?.isWatching && project?.id && tetherStatus.projectId === project.id);
+  const tetherCapturesForProject = (tetherStatus?.captures || [])
+    .filter((capture) => !project?.id || capture.projectId === project.id || capture.projectId === tetherStatus?.projectId)
+    .slice(0, 8);
+  const tetherStatusLabel = isTetherWatchingThisProject
+    ? 'Watching'
+    : tetherStatus?.isWatching
+      ? 'Watching another project'
+      : 'Idle';
+  const tetherSetupWarning = tetherAutoEdit && !canAutoQueueTether
+    ? 'Auto Edit is on. Add a reference image and select at least one DNA control before new captures can generate.'
+    : null;
+  const getTetherCaptureDisplay = (capture: TetherCapture) => {
+    const target = capture.id ? targetImages.find((image) => image.tetherCaptureId === capture.id) : null;
+    if (target?.status === 'processing') return { label: 'Processing', tone: 'text-[var(--color-accent)]' };
+    if (target?.status === 'queued') return { label: 'Queued', tone: 'text-sky-300' };
+    if (target?.status === 'done') return { label: 'Done', tone: 'text-emerald-300' };
+    if (target?.status === 'error' || capture.status === 'failed') return { label: 'Failed', tone: 'text-red-300' };
+    if (capture.status === 'ignored') return { label: 'Ignored', tone: 'text-amber-300' };
+    return { label: 'Imported', tone: 'text-[var(--color-text-muted)]' };
+  };
 
   return (
     <motion.div 
@@ -1387,6 +1702,208 @@ Before outputting, verify:
                 />
               )}
             </div>
+          </section>
+
+          {/* Tethered Mode Section */}
+          <section>
+            <button
+              type="button"
+              onClick={() => setIsTetherPanelOpen((isOpen) => !isOpen)}
+              className="group flex w-full items-center justify-between rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 py-3 text-left transition-all hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)]"
+              aria-expanded={isTetherPanelOpen}
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border ${
+                  isTetherWatchingThisProject
+                    ? 'border-[var(--color-accent)]/30 bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+                    : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-muted)]'
+                }`}>
+                  <CameraIcon className="h-3.5 w-3.5" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-xs font-semibold text-[var(--color-text)]">Tethered Mode</span>
+                  <span className="block truncate text-[11px] text-[var(--color-text-muted)]">
+                    {isTetherWatchingThisProject ? 'Camera folder linked to this project' : 'Auto-import photos from a capture folder'}
+                  </span>
+                </span>
+              </span>
+              <span className="flex flex-shrink-0 items-center gap-2">
+                <span className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                  isTetherWatchingThisProject
+                    ? 'border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+                    : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-muted)]'
+                }`}>
+                  {tetherStatusLabel}
+                </span>
+                <ChevronDownIcon className={`h-4 w-4 text-[var(--color-text-muted)] transition-transform duration-200 ${isTetherPanelOpen ? 'rotate-180' : ''}`} />
+              </span>
+            </button>
+
+            <AnimatePresence initial={false}>
+              {isTetherPanelOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.18 }}
+                  className="mt-3 space-y-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4"
+                >
+                  <div className="flex items-start gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+                    <RadioIcon className={`mt-0.5 h-4 w-4 shrink-0 ${isTetherWatchingThisProject ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'}`} />
+                    <p className="text-xs leading-5 text-[var(--color-text-muted)]">
+                      Point your camera tether software to a folder. ISTUDIO watches that folder, imports new photos, and can queue edits automatically.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Capture folder</label>
+                    <div className="flex gap-2">
+                      <input
+                        value={tetherFolderPath}
+                        onChange={(event) => setTetherFolderPath(event.target.value)}
+                        placeholder="Paste or choose a folder path"
+                        className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-text)] outline-none transition-colors placeholder:text-[var(--color-text-muted)]/50 focus:border-[var(--color-accent)]"
+                      />
+                      <button
+                        type="button"
+                        onClick={handlePickTetherFolder}
+                        disabled={isTetherBusy}
+                        className="btn-secondary flex h-9 w-9 items-center justify-center p-0 disabled:opacity-40"
+                        aria-label="Choose capture folder"
+                      >
+                        <FolderOpenIcon className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-1">
+                    <button
+                      type="button"
+                      onClick={() => setTetherProjectMode('current')}
+                      disabled={!project}
+                      className={`rounded-lg px-3 py-2 text-xs font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-30 ${
+                        tetherProjectMode === 'current'
+                          ? 'bg-[var(--color-accent)] text-black'
+                          : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-white'
+                      }`}
+                    >
+                      Current project
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTetherProjectMode('new')}
+                      className={`rounded-lg px-3 py-2 text-xs font-semibold transition-all ${
+                        tetherProjectMode === 'new'
+                          ? 'bg-[var(--color-accent)] text-black'
+                          : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-white'
+                      }`}
+                    >
+                      New session
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-[var(--color-text)]">Auto Edit</p>
+                      <p className="mt-1 text-[11px] leading-4 text-[var(--color-text-muted)]">Imports always save. Auto Edit queues new shots when DNA controls are ready.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleTetherAutoEditChange(!tetherAutoEdit)}
+                      className={`relative h-6 w-11 flex-shrink-0 rounded-full border transition-colors ${
+                        tetherAutoEdit
+                          ? 'border-[var(--color-accent)] bg-[var(--color-accent)]'
+                          : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)]'
+                      }`}
+                      aria-pressed={tetherAutoEdit}
+                    >
+                      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${tetherAutoEdit ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                    </button>
+                  </div>
+
+                  {tetherSetupWarning && (
+                    <div className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+                      <AlertCircleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+                      <p className="text-[11px] leading-5 text-amber-100/80">{tetherSetupWarning}</p>
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    {isTetherWatchingThisProject ? (
+                      <button
+                        type="button"
+                        onClick={handleStopTether}
+                        disabled={isTetherBusy}
+                        className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-xs font-semibold text-red-300 transition-all hover:bg-red-500 hover:text-white disabled:opacity-40"
+                      >
+                        <StopIcon className="h-3.5 w-3.5" />
+                        Stop tethering
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleStartTether}
+                        disabled={isTetherBusy}
+                        className="primary-cta flex flex-1 items-center justify-center gap-2 px-4 py-3 text-xs disabled:opacity-40"
+                      >
+                        <PlayIcon className="h-3.5 w-3.5" />
+                        Start tethering
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={refreshTetherStatus}
+                      disabled={isTetherBusy}
+                      className="btn-secondary flex h-10 w-10 items-center justify-center p-0 disabled:opacity-40"
+                      aria-label="Refresh tether status"
+                    >
+                      <RefreshCwIcon className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Capture tray</span>
+                      <span className="text-[11px] text-[var(--color-text-muted)]">{tetherCapturesForProject.length}</span>
+                    </div>
+                    {tetherCapturesForProject.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-[var(--color-border)] p-4 text-center text-[11px] text-[var(--color-text-muted)]">
+                        New captures will appear here.
+                      </div>
+                    ) : (
+                      <div className="max-h-52 space-y-2 overflow-y-auto pr-1 custom-scrollbar">
+                        {tetherCapturesForProject.map((capture) => {
+                          const display = getTetherCaptureDisplay(capture);
+                          const previewSrc = capture.image?.base64 && capture.image.mimeType
+                            ? `data:${capture.image.mimeType};base64,${capture.image.base64}`
+                            : null;
+                          return (
+                            <div key={capture.id} className="grid grid-cols-[40px_1fr_auto] gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+                              <div className="h-10 w-10 overflow-hidden rounded-lg border border-[var(--color-border)] bg-black/30">
+                                {previewSrc ? (
+                                  <img src={previewSrc} alt="" className="h-full w-full object-cover" loading="lazy" />
+                                ) : (
+                                  <div className="flex h-full w-full items-center justify-center">
+                                    <CameraIcon className="h-4 w-4 text-[var(--color-text-muted)] opacity-40" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="truncate text-xs font-semibold text-[var(--color-text)]">{capture.fileName}</p>
+                                <p className="mt-0.5 truncate text-[11px] text-[var(--color-text-muted)]">{capture.message || 'Capture detected'}</p>
+                              </div>
+                              <span className={`self-center rounded-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1 text-[10px] font-semibold ${display.tone}`}>
+                                {display.label}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </section>
 
           {/* Scene Lock Section */}

@@ -5,6 +5,7 @@ import fs from 'fs/promises';
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
+import chokidar, { type FSWatcher } from 'chokidar';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,7 +21,36 @@ const PROJECT_SCAN_IGNORED_DIRS = new Set([
   'node_modules',
   'runtime',
 ]);
-const IMPORTABLE_IMAGE_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp']);
+const IMPORTABLE_IMAGE_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.tif', '.tiff', '.webp']);
+const TETHER_SUPPORTED_EXTENSIONS = new Set(['.jpeg', '.jpg', '.png', '.tif', '.tiff', '.webp']);
+const TETHER_RAW_EXTENSIONS = new Set([
+  '.3fr',
+  '.arw',
+  '.cr2',
+  '.cr3',
+  '.crw',
+  '.dcr',
+  '.dng',
+  '.erf',
+  '.fff',
+  '.iiq',
+  '.kdc',
+  '.mef',
+  '.mos',
+  '.mrw',
+  '.nef',
+  '.nrw',
+  '.orf',
+  '.pef',
+  '.raf',
+  '.raw',
+  '.rw2',
+  '.rwl',
+  '.sr2',
+  '.srf',
+  '.srw',
+  '.x3f',
+]);
 
 type StoredProject = {
   id: string;
@@ -54,6 +84,34 @@ type ImportableImageFile = {
   mimeType: string;
   mtimeMs: number;
 };
+
+type TetherCaptureStatus = 'imported' | 'ignored' | 'failed';
+
+type TetherCapture = {
+  id: string;
+  fileName: string;
+  sourcePath: string;
+  projectId: string | null;
+  status: TetherCaptureStatus;
+  message?: string;
+  createdAt: number;
+  importedAt?: number;
+  image?: StoredImageState;
+};
+
+type TetherSession = {
+  folderPath: string;
+  projectId: string;
+  autoEdit: boolean;
+  startedAt: number;
+};
+
+let tetherWatcher: FSWatcher | null = null;
+let tetherSession: TetherSession | null = null;
+let tetherMessage: string | null = null;
+const tetherCaptures: TetherCapture[] = [];
+const tetherSeenSignatures = new Set<string>();
+const tetherImportTimers = new Map<string, NodeJS.Timeout>();
 
 function safeFilePart(value: string): string {
   const cleaned = value
@@ -92,6 +150,7 @@ function extensionForMime(mimeType: string): string {
   if (normalized.includes('webp')) return 'webp';
   if (normalized.includes('gif')) return 'gif';
   if (normalized.includes('avif')) return 'avif';
+  if (normalized.includes('tiff') || normalized.includes('tif')) return 'tif';
   return 'bin';
 }
 
@@ -101,6 +160,7 @@ function mimeTypeForExtension(filePath: string): string {
   if (extension === '.webp') return 'image/webp';
   if (extension === '.gif') return 'image/gif';
   if (extension === '.avif') return 'image/avif';
+  if (extension === '.tif' || extension === '.tiff') return 'image/tiff';
   return 'image/jpeg';
 }
 
@@ -313,6 +373,7 @@ async function ensureProjectAssetDirs(projectDir: string) {
     fs.mkdir(path.join(projectDir, 'targets'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'outputs'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'assets'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'tether', 'inbox'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'editor', 'originals'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'editor', 'layers'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'editor', 'exports'), { recursive: true }),
@@ -639,6 +700,268 @@ function openFolder(folderPath: string) {
   return spawn('xdg-open', [folderPath], { detached: true, stdio: 'ignore' });
 }
 
+function tetherStatus(options: { includeImages?: boolean; knownCaptureIds?: Set<string> } = {}) {
+  const includeImages = Boolean(options.includeImages);
+  const knownCaptureIds = options.knownCaptureIds || new Set<string>();
+
+  return {
+    isWatching: Boolean(tetherWatcher && tetherSession),
+    folderPath: tetherSession?.folderPath || null,
+    projectId: tetherSession?.projectId || null,
+    autoEdit: tetherSession?.autoEdit || false,
+    startedAt: tetherSession?.startedAt || null,
+    message: tetherMessage,
+    captures: tetherCaptures.slice(0, 80).map((capture) => {
+      if (!capture.image || !includeImages || knownCaptureIds.has(capture.id)) {
+        const { image: _image, ...metadataOnlyCapture } = capture;
+        return metadataOnlyCapture;
+      }
+      return capture;
+    }),
+    supportedExtensions: Array.from(TETHER_SUPPORTED_EXTENSIONS).map((extension) => extension.slice(1)),
+    rawExtensions: Array.from(TETHER_RAW_EXTENSIONS).map((extension) => extension.slice(1)),
+  };
+}
+
+function addTetherCapture(capture: TetherCapture) {
+  tetherCaptures.unshift(capture);
+  tetherCaptures.splice(120);
+}
+
+function tetherCaptureId(filePath: string, signature: string): string {
+  return createHash('sha1').update(`${filePath}|${signature}`).digest('hex').slice(0, 16);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForStableFile(filePath: string, maxChecks = 24, delayMs = 500) {
+  let lastSize = -1;
+  let stableChecks = 0;
+
+  for (let attempt = 0; attempt < maxChecks; attempt += 1) {
+    const stats = await fs.stat(filePath);
+    if (stats.isFile() && stats.size > 0 && stats.size === lastSize) {
+      stableChecks += 1;
+      if (stableChecks >= 2) return stats;
+    } else {
+      stableChecks = 0;
+      lastSize = stats.size;
+    }
+    await sleep(delayMs);
+  }
+
+  throw new Error('The capture did not finish writing in time.');
+}
+
+function safeTetherImportName(filePath: string, signature: string) {
+  const extension = path.extname(filePath).toLowerCase();
+  const baseName = safeFilePart(path.basename(filePath, extension));
+  const hash = createHash('sha1').update(signature).digest('hex').slice(0, 10);
+  return `${baseName}-${hash}${extension}`;
+}
+
+async function importTetherCapture(filePath: string) {
+  const session = tetherSession;
+  if (!session) return;
+
+  const absolutePath = path.resolve(filePath);
+  const extension = path.extname(absolutePath).toLowerCase();
+  const fileName = path.basename(absolutePath);
+  const createdAt = Date.now();
+
+  if (TETHER_RAW_EXTENSIONS.has(extension)) {
+    addTetherCapture({
+      id: tetherCaptureId(absolutePath, `${createdAt}`),
+      fileName,
+      sourcePath: absolutePath,
+      projectId: session.projectId,
+      status: 'ignored',
+      message: 'RAW capture ignored. Save JPEG, PNG, WebP, or TIFF previews from your tether software for ISTUDIO import.',
+      createdAt,
+    });
+    return;
+  }
+
+  if (!TETHER_SUPPORTED_EXTENSIONS.has(extension)) {
+    return;
+  }
+
+  try {
+    const stats = await waitForStableFile(absolutePath);
+    const signature = `${absolutePath.toLowerCase()}|${stats.size}|${stats.mtimeMs}`;
+    if (tetherSeenSignatures.has(signature)) return;
+    tetherSeenSignatures.add(signature);
+
+    const projectDir = await findProjectDir(session.projectId);
+    if (!projectDir) {
+      addTetherCapture({
+        id: tetherCaptureId(absolutePath, signature),
+        fileName,
+        sourcePath: absolutePath,
+        projectId: session.projectId,
+        status: 'failed',
+        message: 'The selected project could not be found. Stop tethering and choose a project again.',
+        createdAt,
+      });
+      return;
+    }
+
+    const inboxDir = path.join(projectDir, 'tether', 'inbox');
+    await fs.mkdir(inboxDir, { recursive: true });
+    const targetPath = path.join(inboxDir, safeTetherImportName(absolutePath, signature));
+    if (!existsSync(targetPath)) {
+      await fs.copyFile(absolutePath, targetPath);
+    }
+
+    const base64 = await fs.readFile(targetPath, 'base64');
+    const capture: TetherCapture = {
+      id: tetherCaptureId(absolutePath, signature),
+      fileName,
+      sourcePath: absolutePath,
+      projectId: session.projectId,
+      status: 'imported',
+      message: 'Imported from watched capture folder.',
+      createdAt,
+      importedAt: Date.now(),
+      image: {
+        fileName,
+        base64,
+        mimeType: mimeTypeForExtension(targetPath),
+        width: null,
+        height: null,
+        assetPath: relativeAssetPath(projectDir, targetPath),
+      },
+    };
+    addTetherCapture(capture);
+    tetherMessage = `Imported ${fileName}.`;
+  } catch (error) {
+    addTetherCapture({
+      id: tetherCaptureId(absolutePath, `${createdAt}`),
+      fileName,
+      sourcePath: absolutePath,
+      projectId: session.projectId,
+      status: 'failed',
+      message: error instanceof Error ? error.message : 'Capture import failed.',
+      createdAt,
+    });
+  }
+}
+
+function scheduleTetherImport(filePath: string) {
+  const absolutePath = path.resolve(filePath);
+  const existingTimer = tetherImportTimers.get(absolutePath);
+  if (existingTimer) clearTimeout(existingTimer);
+
+  const timer = setTimeout(() => {
+    tetherImportTimers.delete(absolutePath);
+    importTetherCapture(absolutePath);
+  }, 750);
+  tetherImportTimers.set(absolutePath, timer);
+}
+
+async function stopTetherSession(message = 'Tethered capture stopped.') {
+  for (const timer of tetherImportTimers.values()) {
+    clearTimeout(timer);
+  }
+  tetherImportTimers.clear();
+
+  if (tetherWatcher) {
+    await tetherWatcher.close();
+    tetherWatcher = null;
+  }
+
+  tetherSession = null;
+  tetherMessage = message;
+}
+
+async function startTetherSession(folderPath: string, projectId: string, autoEdit: boolean) {
+  const resolvedFolder = path.resolve(folderPath);
+  const stats = await fs.stat(resolvedFolder).catch(() => null);
+  if (!stats?.isDirectory()) {
+    throw new Error('Capture folder not found. Choose a folder that your camera software can write into.');
+  }
+
+  const projectDir = await findProjectDir(projectId);
+  if (!projectDir) {
+    throw new Error('Project not found. Create or open a Reference Edit project before starting Tethered Mode.');
+  }
+
+  await ensureProjectAssetDirs(projectDir);
+  await stopTetherSession('Restarting tethered capture.');
+  tetherSession = {
+    folderPath: resolvedFolder,
+    projectId,
+    autoEdit,
+    startedAt: Date.now(),
+  };
+  tetherMessage = `Watching ${resolvedFolder}`;
+
+  tetherWatcher = chokidar.watch(resolvedFolder, {
+    awaitWriteFinish: {
+      stabilityThreshold: 1500,
+      pollInterval: 250,
+    },
+    ignoreInitial: true,
+    depth: 0,
+    persistent: true,
+  });
+
+  tetherWatcher
+    .on('add', scheduleTetherImport)
+    .on('change', scheduleTetherImport)
+    .on('unlinkDir', async (folder) => {
+      if (path.resolve(folder) === resolvedFolder) {
+        await stopTetherSession('Capture folder was removed. Choose the folder again to resume tethering.');
+      }
+    })
+    .on('error', (error) => {
+      tetherMessage = error instanceof Error ? error.message : 'Tether watcher error.';
+    });
+}
+
+function pickWindowsFolder(): Promise<string | null> {
+  if (process.platform !== 'win32') {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve, reject) => {
+    const command = [
+      'Add-Type -AssemblyName System.Windows.Forms',
+      '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+      "$dialog.Description = 'Select the folder where your camera tether software saves new photos.'",
+      '$dialog.ShowNewFolderButton = $true',
+      'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }',
+    ].join('; ');
+    const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+      windowsHide: false,
+    });
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill();
+      resolve(null);
+    }, 120000);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code !== 0 && stderr.trim()) {
+        reject(new Error(stderr.trim()));
+        return;
+      }
+      resolve(stdout.trim() || null);
+    });
+  });
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -734,6 +1057,59 @@ async function startServer() {
     } catch (error) {
       console.error('Failed to open projects folder', error);
       res.status(500).json({ error: 'Failed to open projects folder.' });
+    }
+  });
+
+  app.get('/api/tether/status', (req, res) => {
+    const knownCaptureIds = new Set(
+      typeof req.query.known === 'string'
+        ? req.query.known.split(',').map((id) => id.trim()).filter(Boolean)
+        : [],
+    );
+    res.json(tetherStatus({
+      includeImages: req.query.includeImages === '1',
+      knownCaptureIds,
+    }));
+  });
+
+  app.post('/api/tether/folder-picker', async (_req, res) => {
+    try {
+      const folderPath = await pickWindowsFolder();
+      res.json({ path: folderPath });
+    } catch (error) {
+      console.error('Failed to open tether folder picker', error);
+      res.status(500).json({ error: 'Could not open the folder picker. Paste the folder path manually.' });
+    }
+  });
+
+  app.post('/api/tether/start', async (req, res) => {
+    try {
+      const folderPath = typeof req.body?.folderPath === 'string' ? req.body.folderPath.trim() : '';
+      const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+      const autoEdit = Boolean(req.body?.autoEdit);
+
+      if (!folderPath || !projectId) {
+        res.status(400).json({ error: 'Choose a capture folder and project before starting Tethered Mode.' });
+        return;
+      }
+
+      await startTetherSession(folderPath, projectId, autoEdit);
+      res.json(tetherStatus());
+    } catch (error) {
+      console.error('Failed to start tethered capture', error);
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to start Tethered Mode.',
+      });
+    }
+  });
+
+  app.post('/api/tether/stop', async (_req, res) => {
+    try {
+      await stopTetherSession();
+      res.json(tetherStatus());
+    } catch (error) {
+      console.error('Failed to stop tethered capture', error);
+      res.status(500).json({ error: 'Failed to stop Tethered Mode.' });
     }
   });
 

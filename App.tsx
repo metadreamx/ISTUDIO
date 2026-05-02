@@ -458,6 +458,7 @@ const App: React.FC = () => {
             <StyleTransferView 
               project={currentProject}
               onUpdateProject={handleUpdateProject}
+              onCreateProject={(name, initialState) => createProject(name, 'style-transfer', initialState)}
               referenceTemplate={pendingReferenceTemplate}
               onReferenceTemplateConsumed={() => setPendingReferenceTemplate(null)}
             />

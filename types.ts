@@ -31,6 +31,41 @@ export interface Project {
   };
 }
 
+// --- Tethered Capture ---
+
+export type TetherCaptureStatus = 'imported' | 'ignored' | 'failed';
+
+export interface TetherCapture {
+  id: string;
+  fileName: string;
+  sourcePath: string;
+  projectId: string | null;
+  status: TetherCaptureStatus;
+  message?: string;
+  createdAt: number;
+  importedAt?: number;
+  image?: ImageState;
+}
+
+export interface TetherStatus {
+  isWatching: boolean;
+  folderPath: string | null;
+  projectId: string | null;
+  autoEdit: boolean;
+  startedAt: number | null;
+  message: string | null;
+  captures: TetherCapture[];
+  supportedExtensions: string[];
+  rawExtensions: string[];
+}
+
+export interface TetherProjectState {
+  folderPath?: string;
+  autoEdit?: boolean;
+  importedCaptureIds?: string[];
+  activeSessionStartedAt?: number | null;
+}
+
 // --- Canvas Tool ---
 
 export type CanvasTool = 'select' | 'image' | 'text' | 'shape' | 'brush' | 'hand';
@@ -193,6 +228,8 @@ export interface BatchImage {
     generated: string | null;
     status: 'pending' | 'queued' | 'processing' | 'done' | 'error';
     dominantColor: string | null;
+    source?: 'manual' | 'tether';
+    tetherCaptureId?: string;
 }
 
 // --- Style Transfer ---
