@@ -783,6 +783,31 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
     }
   }, [selectedLayerId, document?.layers]);
 
+  const persistCanvasDocument = useCallback((nextDocument: CanvasDocument, statusMessage = 'Saved to project folder') => {
+    const currentProject = projectRef.current;
+    if (!currentProject) return;
+    const existingCanvas = currentProject.state?.canvas;
+    const existingDocuments = Array.isArray(existingCanvas?.documents) ? existingCanvas.documents as CanvasDocument[] : [];
+    const documents = existingDocuments.some((item) => item.id === nextDocument.id)
+      ? existingDocuments.map((item) => (item.id === nextDocument.id ? nextDocument : item))
+      : [nextDocument, ...existingDocuments];
+    const exportImages = nextDocument.exports.map((item) => item.dataUrl).filter(Boolean);
+
+    onUpdateProject({
+      ...currentProject,
+      lastModified: Date.now(),
+      generatedImages: Array.from(new Set([...(currentProject.generatedImages || []), ...exportImages])).slice(-24),
+      state: {
+        ...(currentProject.state || {}),
+        canvas: {
+          activeDocumentId: nextDocument.id,
+          documents,
+        },
+      },
+    });
+    setStatus(statusMessage);
+  }, [onUpdateProject]);
+
   useEffect(() => {
     if (!project?.id || !document) return;
     if (saveTimerRef.current) {
@@ -790,34 +815,13 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
     }
 
     saveTimerRef.current = window.setTimeout(() => {
-      const currentProject = projectRef.current;
-      if (!currentProject) return;
-      const existingCanvas = currentProject.state?.canvas;
-      const existingDocuments = Array.isArray(existingCanvas?.documents) ? existingCanvas.documents as CanvasDocument[] : [];
-      const documents = existingDocuments.some((item) => item.id === document.id)
-        ? existingDocuments.map((item) => (item.id === document.id ? document : item))
-        : [document, ...existingDocuments];
-      const exportImages = document.exports.map((item) => item.dataUrl).filter(Boolean);
-
-      onUpdateProject({
-        ...currentProject,
-        lastModified: Date.now(),
-        generatedImages: Array.from(new Set([...(currentProject.generatedImages || []), ...exportImages])).slice(-24),
-        state: {
-          ...(currentProject.state || {}),
-          canvas: {
-            activeDocumentId: document.id,
-            documents,
-          },
-        },
-      });
-      setStatus('Saved to project folder');
+      persistCanvasDocument(document);
     }, 700);
 
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
-  }, [document, onUpdateProject, project?.id]);
+  }, [document, persistCanvasDocument, project?.id]);
 
   useEffect(() => {
     if (!status) return;
@@ -980,19 +984,20 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
       createdAt: Date.now(),
     }));
 
-    commitDocument((current) => {
-      const layers: CanvasLayer[] = assets.map((asset, index) => createImageLayerFromAsset(asset, current, index));
-      return {
-        ...current,
-        assets: [...current.assets, ...assets],
-        layers: [...current.layers, ...layers],
-      };
-    }, 'Import image');
+    const layers: CanvasLayer[] = assets.map((asset, index) => createImageLayerFromAsset(asset, document, index));
+    const nextDocument = {
+      ...document,
+      assets: [...document.assets, ...assets],
+      layers: [...document.layers, ...layers],
+      updatedAt: Date.now(),
+    };
+    commitDocument(nextDocument, 'Import image');
+    persistCanvasDocument(nextDocument, 'Images saved to project folder');
     setSelectedLayerId(null);
     setActiveTool('select');
     setActivePanel('layers');
     setStatus('Images added');
-  }, [commitDocument, document]);
+  }, [commitDocument, document, persistCanvasDocument]);
 
   const handleFileInput = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) {
@@ -1010,19 +1015,37 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ project, onUpdateProject
     try {
       const image = await processAndResizeImage(file);
       const natural = getImageNaturalSize(image);
-      updateSelectedLayer({
+      const updates = {
         source: image,
         naturalWidth: natural.width,
         naturalHeight: natural.height,
         fitMode: 'fit',
         crop: null,
-      } as Partial<CanvasImageLayer>, 'Replace image');
-      setStatus('Image replaced');
+      } as Partial<CanvasImageLayer>;
+      const nextDocument = document ? {
+        ...document,
+        layers: document.layers.map((layer) => {
+          if (layer.id !== selectedLayer.id) return layer;
+          const nextUpdates = (layer.type === 'image' || layer.type === 'reference' || layer.type === 'ai-result')
+            ? normalizeImageResize(layer, updates)
+            : updates;
+          return { ...layer, ...nextUpdates } as CanvasLayer;
+        }),
+        updatedAt: Date.now(),
+      } : null;
+
+      if (nextDocument) {
+        commitDocument(nextDocument, 'Replace image');
+        persistCanvasDocument(nextDocument, 'Replacement image saved');
+      } else {
+        updateSelectedLayer(updates, 'Replace image');
+      }
+      setStatus('Image replaced and saved');
     } catch (error) {
       console.error('Image replace failed', error);
       setStatus(error instanceof Error ? error.message : 'Image replace failed');
     }
-  }, [selectedLayer, updateSelectedLayer]);
+  }, [commitDocument, document, persistCanvasDocument, selectedLayer, updateSelectedLayer]);
 
   const alignSelectedLayer = useCallback((position: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom') => {
     if (!document || !selectedLayer) return;

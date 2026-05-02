@@ -20,6 +20,7 @@ const PROJECT_SCAN_IGNORED_DIRS = new Set([
   'node_modules',
   'runtime',
 ]);
+const IMPORTABLE_IMAGE_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp']);
 
 type StoredProject = {
   id: string;
@@ -44,6 +45,14 @@ type StoredImageState = {
   width?: number | null;
   height?: number | null;
   assetPath?: string;
+};
+
+type ImportableImageFile = {
+  absolutePath: string;
+  relativePath: string;
+  fileName: string;
+  mimeType: string;
+  mtimeMs: number;
 };
 
 function safeFilePart(value: string): string {
@@ -84,6 +93,15 @@ function extensionForMime(mimeType: string): string {
   if (normalized.includes('gif')) return 'gif';
   if (normalized.includes('avif')) return 'avif';
   return 'bin';
+}
+
+function mimeTypeForExtension(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === '.png') return 'image/png';
+  if (extension === '.webp') return 'image/webp';
+  if (extension === '.gif') return 'image/gif';
+  if (extension === '.avif') return 'image/avif';
+  return 'image/jpeg';
 }
 
 function assetBucketForPath(segments: string[]): string {
@@ -185,6 +203,106 @@ async function resolvePortableProjectAsset(projectDir: string, storedPath: strin
   return fileName ? findProjectAssetByName(projectDir, fileName) : null;
 }
 
+function importedProjectId(projectDir: string): string {
+  const relativePath = path.relative(PROJECTS_DIR, projectDir) || path.basename(projectDir);
+  const hash = createHash('sha1').update(relativePath.toLowerCase()).digest('hex').slice(0, 12);
+  return `imported-${hash}`;
+}
+
+function importedProjectName(projectDir: string): string {
+  if (path.resolve(projectDir) === path.resolve(PROJECTS_DIR)) {
+    return 'Loose Project Files';
+  }
+  return path.basename(projectDir).replace(/[-_]+/g, ' ').trim() || 'Imported Project';
+}
+
+async function listImportableImages(projectDir: string, depth = 0): Promise<ImportableImageFile[]> {
+  if (depth > PROJECT_SCAN_MAX_DEPTH) return [];
+
+  let entries;
+  try {
+    entries = await fs.readdir(projectDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const imageFiles = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && IMPORTABLE_IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
+      .map(async (entry) => {
+        const absolutePath = path.join(projectDir, entry.name);
+        const stats = await fs.stat(absolutePath).catch(() => null);
+        if (!stats) return null;
+        return {
+          absolutePath,
+          relativePath: relativeAssetPath(projectDir, absolutePath),
+          fileName: entry.name,
+          mimeType: mimeTypeForExtension(entry.name),
+          mtimeMs: stats.mtimeMs,
+        };
+      }),
+  );
+
+  const nestedImages = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && !PROJECT_SCAN_IGNORED_DIRS.has(entry.name.toLowerCase()))
+      .map(async (entry) => {
+        const childDir = path.join(projectDir, entry.name);
+        const childEntries = await fs.readdir(childDir, { withFileTypes: true }).catch(() => []);
+        if (childEntries.some((child) => child.isFile() && child.name.toLowerCase() === PROJECT_JSON)) {
+          return [];
+        }
+        return listImportableImages(childDir, depth + 1);
+      }),
+  );
+
+  return [
+    ...imageFiles.filter((image): image is ImportableImageFile => image !== null),
+    ...nestedImages.flat(),
+  ].sort((a, b) => a.fileName.localeCompare(b.fileName));
+}
+
+function imageFileToState(projectDir: string, image: ImportableImageFile): StoredImageState {
+  return {
+    fileName: image.fileName,
+    base64: null,
+    mimeType: image.mimeType,
+    width: null,
+    height: null,
+    assetPath: relativeAssetPath(projectDir, image.absolutePath),
+  };
+}
+
+async function readImportedProjectFromFiles(projectDir: string): Promise<StoredProject | null> {
+  const images = await listImportableImages(projectDir);
+  if (images.length === 0) return null;
+
+  const createdAt = Math.min(...images.map((image) => image.mtimeMs));
+  const lastModified = Math.max(...images.map((image) => image.mtimeMs));
+  const referenceImage = imageFileToState(projectDir, images[0]);
+  const targetImages = images.map((image, index) => ({
+    id: `${safeFilePart(image.fileName)}-${Math.round(image.mtimeMs)}-${index}`,
+    target: imageFileToState(projectDir, image),
+    generated: null,
+    status: 'pending',
+    dominantColor: null,
+  }));
+
+  return {
+    id: importedProjectId(projectDir),
+    name: importedProjectName(projectDir),
+    createdAt,
+    lastModified,
+    generatedImages: [],
+    state: {
+      referenceImage,
+      targetImages,
+      generationHistory: [],
+      recoveredFromFiles: true,
+    },
+  };
+}
+
 async function ensureProjectsDir() {
   await fs.mkdir(PROJECTS_DIR, { recursive: true });
 }
@@ -218,9 +336,14 @@ async function findProjectJsonDirectories(directory: string, depth = 0): Promise
     return [];
   }
 
-  if (entries.some((entry) => entry.isFile() && entry.name.toLowerCase() === PROJECT_JSON)) {
+  const hasProjectJson = entries.some((entry) => entry.isFile() && entry.name.toLowerCase() === PROJECT_JSON);
+  if (hasProjectJson && path.resolve(directory) !== path.resolve(PROJECTS_DIR)) {
     return [directory];
   }
+
+  const hasImportableImages = entries.some(
+    (entry) => entry.isFile() && IMPORTABLE_IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()),
+  );
 
   const nested = await Promise.all(
     entries
@@ -228,7 +351,7 @@ async function findProjectJsonDirectories(directory: string, depth = 0): Promise
       .map((entry) => findProjectJsonDirectories(path.join(directory, entry.name), depth + 1)),
   );
 
-  return nested.flat();
+  return [...((hasProjectJson || hasImportableImages) ? [directory] : []), ...nested.flat()];
 }
 
 async function projectDirectories(): Promise<string[]> {
@@ -247,6 +370,7 @@ async function legacyProjectFiles(): Promise<string[]> {
 
 async function readRawProjectFile(filePath: string): Promise<StoredProject | null> {
   try {
+    if (!existsSync(filePath)) return null;
     const raw = await fs.readFile(filePath, 'utf8');
     const project = JSON.parse(raw.replace(/^\uFEFF/, '')) as StoredProject;
     if (!project || typeof project.id !== 'string') return null;
@@ -303,13 +427,17 @@ async function hydrateValue(value: unknown, projectDir: string): Promise<unknown
 async function readProjectFromDirectory(projectDir: string): Promise<StoredProject | null> {
   const projectPath = path.join(projectDir, PROJECT_JSON);
   const project = await readRawProjectFile(projectPath);
-  if (!project) return null;
+  if (!project) {
+    const importedProject = await readImportedProjectFromFiles(projectDir);
+    return importedProject ? await hydrateValue(importedProject, projectDir) as StoredProject : null;
+  }
 
   try {
     return await hydrateValue(project, projectDir) as StoredProject;
   } catch (error) {
-    console.warn(`Skipping project with missing or invalid assets: ${projectPath}`, error);
-    return null;
+    console.warn(`Recovering project with missing or invalid data: ${projectPath}`, error);
+    const importedProject = await readImportedProjectFromFiles(projectDir);
+    return importedProject ? await hydrateValue(importedProject, projectDir) as StoredProject : project;
   }
 }
 
@@ -333,11 +461,12 @@ function getArrayAtPath(value: unknown, keys: string[]): unknown[] {
 
 async function readProjectSummaryFromDirectory(projectDir: string): Promise<(StoredProject & { summary: { isSummary: true; outputCount: number; canvasDocumentCount: number } }) | null> {
   const projectPath = path.join(projectDir, PROJECT_JSON);
-  const project = await readRawProjectFile(projectPath);
+  const project = await readRawProjectFile(projectPath) || await readImportedProjectFromFiles(projectDir);
   if (!project) return null;
 
   const state = isRecord(project.state) ? project.state : {};
   const history = getArrayAtPath(state, ['generationHistory']);
+  const targetImages = getArrayAtPath(state, ['targetImages']);
   const canvasDocuments = getArrayAtPath(state, ['canvas', 'documents']);
   const generatedImages = Array.isArray(project.generatedImages) ? project.generatedImages : [];
 
@@ -350,7 +479,7 @@ async function readProjectSummaryFromDirectory(projectDir: string): Promise<(Sto
     state: {},
     summary: {
       isSummary: true,
-      outputCount: Math.max(history.length, generatedImages.length),
+      outputCount: Math.max(history.length, generatedImages.length, targetImages.length),
       canvasDocumentCount: canvasDocuments.length,
     },
   };
@@ -370,6 +499,7 @@ async function findProjectDir(id: string): Promise<string | null> {
   for (const projectDir of directories) {
     const project = await readRawProjectFile(path.join(projectDir, PROJECT_JSON));
     if (project?.id === id) return projectDir;
+    if (!project && importedProjectId(projectDir) === id) return projectDir;
   }
   return null;
 }
@@ -457,7 +587,8 @@ async function writeProject(project: StoredProject) {
   await ensureProjectsDir();
   const existingDir = await findProjectDir(project.id);
   const legacyFile = await findLegacyProjectFile(project.id);
-  const targetDir = path.join(PROJECTS_DIR, `${safeFilePart(project.name)}-${project.id}`);
+  const reusableExistingDir = existingDir && path.resolve(existingDir) !== path.resolve(PROJECTS_DIR) ? existingDir : null;
+  const targetDir = reusableExistingDir || path.join(PROJECTS_DIR, `${safeFilePart(project.name)}-${project.id}`);
   const tempPath = path.join(targetDir, `${PROJECT_JSON}.tmp`);
   const projectPath = path.join(targetDir, PROJECT_JSON);
 
@@ -468,9 +599,6 @@ async function writeProject(project: StoredProject) {
   await fs.writeFile(tempPath, JSON.stringify(storedProject, null, 2), 'utf8');
   await fs.rename(tempPath, projectPath);
 
-  if (existingDir && existingDir !== targetDir && existsSync(existingDir)) {
-    await fs.rm(existingDir, { recursive: true, force: true });
-  }
   if (legacyFile && existsSync(legacyFile)) {
     await fs.unlink(legacyFile);
   }
@@ -491,9 +619,13 @@ async function deleteProjectFolder(id: string) {
 async function migrateLegacyProjectFiles() {
   const files = await legacyProjectFiles();
   for (const filePath of files) {
-    const project = await readRawProjectFile(filePath);
-    if (!project) continue;
-    await writeProject(project);
+    try {
+      const project = await readRawProjectFile(filePath);
+      if (!project) continue;
+      await writeProject(project);
+    } catch (error) {
+      console.warn(`Skipping legacy project migration for ${filePath}`, error);
+    }
   }
 }
 

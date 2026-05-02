@@ -257,61 +257,61 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     };
   }, [isGenerationHistoryOpen]);
 
-  useEffect(() => {
-    if (!referenceTemplate?.base64 || !referenceTemplate.mimeType) return;
+  const buildProjectSnapshot = useCallback((overrides: Partial<{
+    referenceImage: ImageState;
+    targetImages: BatchImage[];
+    checklist: StyleCategory[];
+    sceneBlueprint: string | null;
+    accentColor: string | null;
+    aspectRatio: AspectRatio | undefined;
+    customClothingItems: typeof customClothingItems;
+    customAccessoryItems: typeof customAccessoryItems;
+    customFaceItems: typeof customFaceItems;
+    customBackgroundItem: CustomBackgroundItem;
+    customSkyItem: CustomSkyItem;
+    sessionSeed: number | null;
+    anchorImageId: string | null;
+    generationHistory: HistoryItem[];
+  }> = {}): Project | null => {
+    if (!project) return null;
 
-    setReferenceImage(referenceTemplate);
-    setChecklist([]);
-    setSceneBlueprint(null);
-    setAccentColor(null);
-    setOpenCategoryId(null);
-    lastAnalyzedRefBase64.current = null;
-    onReferenceTemplateConsumed?.();
-  }, [referenceTemplate?.base64, referenceTemplate?.mimeType, onReferenceTemplateConsumed]);
+    const nextReferenceImage = overrides.referenceImage ?? referenceImage;
+    const nextTargetImages = overrides.targetImages ?? targetImages;
+    const nextGenerationHistory = overrides.generationHistory ?? generationHistory;
+    const generatedImages = Array.from(new Set([
+      ...nextGenerationHistory.map(item => item.generated).filter((img): img is string => !!img),
+      ...nextTargetImages.map(img => img.generated).filter((img): img is string => !!img),
+    ])).slice(0, 4);
+    const compactTargetImages = nextTargetImages.map((image) => ({
+      ...image,
+      generated: null,
+    }));
+    const compactGenerationHistory = compactHistoryForSave(nextGenerationHistory, nextReferenceImage);
 
-  // Persist project state
-  useEffect(() => {
-    if (project) {
-        const generatedImages = Array.from(new Set([
-            ...generationHistory.map(item => item.generated).filter((img): img is string => !!img),
-            ...targetImages.map(img => img.generated).filter((img): img is string => !!img),
-        ])).slice(0, 4);
-        const compactTargetImages = targetImages.map((image) => ({
-            ...image,
-            generated: null,
-        }));
-        const compactGenerationHistory = compactHistoryForSave(generationHistory, referenceImage);
-
-        const updatedProject: Project = {
-            ...project,
-            lastModified: Date.now(),
-            generatedImages,
-            state: {
-                ...(project.state || {}),
-                referenceImage,
-                targetImages: compactTargetImages,
-                checklist,
-                sceneBlueprint,
-                accentColor,
-                aspectRatio,
-                customClothingItems,
-                customAccessoryItems,
-                customFaceItems,
-                customBackgroundItem,
-                customSkyItem,
-                sessionSeed,
-                anchorImageId,
-                generationHistory: compactGenerationHistory
-            }
-        };
-        // Debounce or only save on specific changes to avoid excessive DB writes
-        const timer = setTimeout(() => {
-            onUpdateProject(updatedProject);
-        }, 1000);
-        return () => clearTimeout(timer);
-    }
+    return {
+      ...project,
+      lastModified: Date.now(),
+      generatedImages,
+      state: {
+        ...(project.state || {}),
+        referenceImage: nextReferenceImage,
+        targetImages: compactTargetImages,
+        checklist: overrides.checklist ?? checklist,
+        sceneBlueprint: overrides.sceneBlueprint ?? sceneBlueprint,
+        accentColor: overrides.accentColor ?? accentColor,
+        aspectRatio: overrides.aspectRatio ?? aspectRatio,
+        customClothingItems: overrides.customClothingItems ?? customClothingItems,
+        customAccessoryItems: overrides.customAccessoryItems ?? customAccessoryItems,
+        customFaceItems: overrides.customFaceItems ?? customFaceItems,
+        customBackgroundItem: overrides.customBackgroundItem ?? customBackgroundItem,
+        customSkyItem: overrides.customSkyItem ?? customSkyItem,
+        sessionSeed: overrides.sessionSeed ?? sessionSeed,
+        anchorImageId: overrides.anchorImageId ?? anchorImageId,
+        generationHistory: compactGenerationHistory,
+      },
+    };
   }, [
-    project?.id,
+    project,
     referenceImage,
     targetImages,
     checklist,
@@ -326,8 +326,59 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     sessionSeed,
     anchorImageId,
     generationHistory,
-    onUpdateProject
   ]);
+
+  const saveProjectNow = useCallback((overrides: Parameters<typeof buildProjectSnapshot>[0] = {}) => {
+    const updatedProject = buildProjectSnapshot(overrides);
+    if (updatedProject) {
+      onUpdateProject(updatedProject);
+    }
+  }, [buildProjectSnapshot, onUpdateProject]);
+
+  useEffect(() => {
+    if (!referenceTemplate?.base64 || !referenceTemplate.mimeType) return;
+
+    setReferenceImage(referenceTemplate);
+    setChecklist([]);
+    setSceneBlueprint(null);
+    setAccentColor(null);
+    setOpenCategoryId(null);
+    lastAnalyzedRefBase64.current = null;
+    saveProjectNow({
+      referenceImage: referenceTemplate,
+      checklist: [],
+      sceneBlueprint: null,
+      accentColor: null,
+    });
+    onReferenceTemplateConsumed?.();
+  }, [referenceTemplate, referenceTemplate?.base64, referenceTemplate?.mimeType, onReferenceTemplateConsumed, saveProjectNow]);
+
+  // Persist project state
+  useEffect(() => {
+    const updatedProject = buildProjectSnapshot();
+    if (!updatedProject) return;
+
+    const timer = setTimeout(() => {
+      onUpdateProject(updatedProject);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [buildProjectSnapshot, onUpdateProject]);
+
+  const handleReferenceImageSelect = useCallback((nextReferenceImage: ImageState) => {
+    const resetChecklist: StyleCategory[] = [];
+    setReferenceImage(nextReferenceImage);
+    setChecklist(resetChecklist);
+    setSceneBlueprint(null);
+    setAccentColor(null);
+    setOpenCategoryId(null);
+    lastAnalyzedRefBase64.current = null;
+    saveProjectNow({
+      referenceImage: nextReferenceImage,
+      checklist: resetChecklist,
+      sceneBlueprint: null,
+      accentColor: null,
+    });
+  }, [saveProjectNow]);
 
   const handleTargetImagesSelect = useCallback(async (imageStates: ImageState[]) => {
     const newBatchImages: BatchImage[] = await Promise.all(imageStates.map(async (state, index) => {
@@ -343,15 +394,14 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         };
     }));
 
-    setTargetImages(prev => {
-        const updatedImages = [...prev, ...newBatchImages];
-        if (prev.length === 0 && updatedImages.length > 0) {
-            setActiveImageIndex(0);
-        }
-        return updatedImages;
-    });
+    const updatedImages = [...targetImages, ...newBatchImages];
+    setTargetImages(updatedImages);
+    if (targetImages.length === 0 && updatedImages.length > 0) {
+      setActiveImageIndex(0);
+    }
+    saveProjectNow({ targetImages: updatedImages });
 
-  }, []);
+  }, [saveProjectNow, targetImages]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -465,7 +515,9 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, []);
 
   const handleCustomClothingUpload = useCallback(async (gender: 'man' | 'woman', id: string, imageState: ImageState) => {
-    setCustomClothingItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, image: imageState, status: 'analyzing' } : item) }));
+    const nextItems = { ...customClothingItems, [gender]: customClothingItems[gender].map(item => item.id === id ? { ...item, image: imageState, status: 'analyzing' as const } : item) };
+    setCustomClothingItems(nextItems);
+    saveProjectNow({ customClothingItems: nextItems });
     try {
       const analysis = await analyzeClothingImage(imageState.base64!);
       setCustomClothingItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, analysis, status: 'ready' } : item) }));
@@ -473,7 +525,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       console.error("Clothing analysis failed:", e);
       setCustomClothingItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, status: 'error' } : item) }));
     }
-  }, []);
+  }, [customClothingItems, saveProjectNow]);
 
   const handleCustomClothingToggle = useCallback((gender: 'man' | 'woman', id: string, enabled: boolean) => {
     setCustomClothingItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, enabled } : item) }));
@@ -484,7 +536,9 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, []);
   
   const handleCustomAccessoryUpload = useCallback(async (gender: 'man' | 'woman', id: string, imageState: ImageState) => {
-    setCustomAccessoryItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, image: imageState, status: 'analyzing' } : item) }));
+    const nextItems = { ...customAccessoryItems, [gender]: customAccessoryItems[gender].map(item => item.id === id ? { ...item, image: imageState, status: 'analyzing' as const } : item) };
+    setCustomAccessoryItems(nextItems);
+    saveProjectNow({ customAccessoryItems: nextItems });
     try {
       const analysis = await analyzeAccessoryImage(imageState.base64!);
       setCustomAccessoryItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, analysis, status: 'ready' } : item) }));
@@ -492,7 +546,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       console.error("Accessory analysis failed:", e);
       setCustomAccessoryItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, status: 'error' } : item) }));
     }
-  }, []);
+  }, [customAccessoryItems, saveProjectNow]);
 
   const handleCustomAccessoryToggle = useCallback((gender: 'man' | 'woman', id: string, enabled: boolean) => {
     setCustomAccessoryItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, enabled } : item) }));
@@ -503,7 +557,9 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, []);
   
   const handleCustomFaceUpload = useCallback(async (gender: 'man' | 'woman', imageState: ImageState) => {
-    setCustomFaceItems(prev => ({ ...prev, [gender]: { ...prev[gender], image: imageState, status: 'analyzing' } }));
+    const nextItems = { ...customFaceItems, [gender]: { ...customFaceItems[gender], image: imageState, status: 'analyzing' as const } };
+    setCustomFaceItems(nextItems);
+    saveProjectNow({ customFaceItems: nextItems });
     try {
       const analysis = await analyzeFaceImage(imageState.base64!);
       setCustomFaceItems(prev => ({ ...prev, [gender]: { ...prev[gender], analysis, status: 'ready' } }));
@@ -511,7 +567,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       console.error("Face analysis failed:", e);
       setCustomFaceItems(prev => ({ ...prev, [gender]: { ...prev[gender], status: 'error' } }));
     }
-  }, []);
+  }, [customFaceItems, saveProjectNow]);
 
   const handleCustomFaceToggle = useCallback((gender: 'man' | 'woman', enabled: boolean) => {
     setCustomFaceItems(prev => ({ ...prev, [gender]: { ...prev[gender], enabled } }));
@@ -522,7 +578,9 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, []);
   
   const handleCustomBackgroundUpload = useCallback(async (imageState: ImageState) => {
-    setCustomBackgroundItem(prev => ({ ...prev, image: imageState, status: 'analyzing' }));
+    const nextItem = { ...customBackgroundItem, image: imageState, status: 'analyzing' as const };
+    setCustomBackgroundItem(nextItem);
+    saveProjectNow({ customBackgroundItem: nextItem });
     try {
       const analysis = await analyzeBackgroundImage(imageState.base64!);
       setCustomBackgroundItem(prev => ({ ...prev, analysis, status: 'ready' }));
@@ -530,7 +588,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       console.error("Background analysis failed:", e);
       setCustomBackgroundItem(prev => ({ ...prev, status: 'error' }));
     }
-  }, []);
+  }, [customBackgroundItem, saveProjectNow]);
 
   const handleCustomBackgroundToggle = useCallback((enabled: boolean) => {
     setCustomBackgroundItem(prev => ({ ...prev, enabled }));
@@ -541,7 +599,9 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, []);
 
   const handleCustomSkyUpload = useCallback(async (imageState: ImageState) => {
-    setCustomSkyItem(prev => ({ ...prev, image: imageState, status: 'analyzing' }));
+    const nextItem = { ...customSkyItem, image: imageState, status: 'analyzing' as const };
+    setCustomSkyItem(nextItem);
+    saveProjectNow({ customSkyItem: nextItem });
     try {
       const analysis = await analyzeSkyImage(imageState.base64!);
       setCustomSkyItem(prev => ({ ...prev, analysis, status: 'ready' }));
@@ -549,7 +609,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       console.error("Sky analysis failed:", e);
       setCustomSkyItem(prev => ({ ...prev, status: 'error' }));
     }
-  }, []);
+  }, [customSkyItem, saveProjectNow]);
 
   const handleCustomSkyToggle = useCallback((enabled: boolean) => {
     setCustomSkyItem(prev => ({ ...prev, enabled }));
@@ -1262,7 +1322,7 @@ Before outputting, verify:
               onRemoveImage={handleRemoveImage}
               generationStatus={generationStatus}
               referenceImage={referenceImage}
-              onReferenceImageSelect={setReferenceImage}
+              onReferenceImageSelect={handleReferenceImageSelect}
               referenceDominantColor={accentColor}
               selectedImageIds={selectedImageIds}
               onToggleImageSelection={handleToggleSelection}
@@ -1301,7 +1361,7 @@ Before outputting, verify:
               </h2>
               {referenceImage.base64 && (
                 <button 
-                  onClick={() => setReferenceImage({ fileName: null, base64: null, mimeType: null })}
+                  onClick={() => handleReferenceImageSelect({ fileName: null, base64: null, mimeType: null })}
                   className="text-xs font-semibold text-red-400/80 transition-colors hover:text-red-300"
                 >
                   Clear
@@ -1314,7 +1374,7 @@ Before outputting, verify:
                 title="DNA Reference"
                 subtitle="Upload source"
                 image={referenceImage}
-                onImageSelect={setReferenceImage}
+                onImageSelect={handleReferenceImageSelect}
                 dominantColor={accentColor}
                 disabled={isControlsLocked}
                 className="aspect-square overflow-hidden rounded-lg"
