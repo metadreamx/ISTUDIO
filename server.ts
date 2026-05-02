@@ -110,7 +110,8 @@ let tetherWatcher: FSWatcher | null = null;
 let tetherSession: TetherSession | null = null;
 let tetherMessage: string | null = null;
 const tetherCaptures: TetherCapture[] = [];
-const tetherSeenSignatures = new Set<string>();
+const tetherSeenSourceHashes = new Map<string, string>();
+const tetherSeenContentHashes = new Set<string>();
 const tetherImportTimers = new Map<string, NodeJS.Timeout>();
 
 function safeFilePart(value: string): string {
@@ -755,10 +756,10 @@ async function waitForStableFile(filePath: string, maxChecks = 24, delayMs = 500
   throw new Error('The capture did not finish writing in time.');
 }
 
-function safeTetherImportName(filePath: string, signature: string) {
+function safeTetherImportName(filePath: string, contentHash: string) {
   const extension = path.extname(filePath).toLowerCase();
   const baseName = safeFilePart(path.basename(filePath, extension));
-  const hash = createHash('sha1').update(signature).digest('hex').slice(0, 10);
+  const hash = contentHash.slice(0, 10);
   return `${baseName}-${hash}${extension}`;
 }
 
@@ -789,15 +790,26 @@ async function importTetherCapture(filePath: string) {
   }
 
   try {
-    const stats = await waitForStableFile(absolutePath);
-    const signature = `${absolutePath.toLowerCase()}|${stats.size}|${stats.mtimeMs}`;
-    if (tetherSeenSignatures.has(signature)) return;
-    tetherSeenSignatures.add(signature);
+    await waitForStableFile(absolutePath);
+    const normalizedSourcePath = absolutePath.toLowerCase();
+
+    if (isInsideDirectory(PROJECTS_DIR, absolutePath)) {
+      return;
+    }
+
+    const sourceBuffer = await fs.readFile(absolutePath);
+    const contentHash = createHash('sha1').update(sourceBuffer).digest('hex');
+    const previousHashForSource = tetherSeenSourceHashes.get(normalizedSourcePath);
+    if (previousHashForSource === contentHash || tetherSeenContentHashes.has(contentHash)) {
+      return;
+    }
+    tetherSeenSourceHashes.set(normalizedSourcePath, contentHash);
+    tetherSeenContentHashes.add(contentHash);
 
     const projectDir = await findProjectDir(session.projectId);
     if (!projectDir) {
       addTetherCapture({
-        id: tetherCaptureId(absolutePath, signature),
+        id: tetherCaptureId(absolutePath, contentHash),
         fileName,
         sourcePath: absolutePath,
         projectId: session.projectId,
@@ -810,14 +822,14 @@ async function importTetherCapture(filePath: string) {
 
     const inboxDir = path.join(projectDir, 'tether', 'inbox');
     await fs.mkdir(inboxDir, { recursive: true });
-    const targetPath = path.join(inboxDir, safeTetherImportName(absolutePath, signature));
-    if (!existsSync(targetPath)) {
-      await fs.copyFile(absolutePath, targetPath);
+    const targetPath = path.join(inboxDir, safeTetherImportName(absolutePath, contentHash));
+    if (path.resolve(targetPath) !== absolutePath && !existsSync(targetPath)) {
+      await fs.writeFile(targetPath, sourceBuffer);
     }
 
-    const base64 = await fs.readFile(targetPath, 'base64');
+    const base64 = sourceBuffer.toString('base64');
     const capture: TetherCapture = {
-      id: tetherCaptureId(absolutePath, signature),
+      id: tetherCaptureId(absolutePath, contentHash),
       fileName,
       sourcePath: absolutePath,
       projectId: session.projectId,
@@ -887,9 +899,17 @@ async function startTetherSession(folderPath: string, projectId: string, autoEdi
   if (!projectDir) {
     throw new Error('Project not found. Create or open a Reference Edit project before starting Tethered Mode.');
   }
+  if (isInsideDirectory(PROJECTS_DIR, resolvedFolder) || isInsideDirectory(projectDir, resolvedFolder)) {
+    throw new Error('Choose a camera capture folder outside the ISTUDIO projects folder. This prevents imported files from being watched again.');
+  }
 
   await ensureProjectAssetDirs(projectDir);
+  const isDifferentSource = !tetherSession || tetherSession.folderPath !== resolvedFolder || tetherSession.projectId !== projectId;
   await stopTetherSession('Restarting tethered capture.');
+  if (isDifferentSource) {
+    tetherSeenSourceHashes.clear();
+    tetherSeenContentHashes.clear();
+  }
   tetherSession = {
     folderPath: resolvedFolder,
     projectId,
