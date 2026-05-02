@@ -613,13 +613,15 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   useEffect(() => {
     if (!project?.id || !tetherStatus?.captures.length) return;
 
-    const newCaptures = tetherStatus.captures.filter((capture) =>
-      capture.projectId === project.id &&
-      capture.status === 'imported' &&
-      capture.image?.base64 &&
-      capture.image.mimeType &&
-      !importedTetherCaptureIdsRef.current.has(capture.id),
-    );
+    const newCaptures = tetherStatus.captures
+      .filter((capture) =>
+        capture.projectId === project.id &&
+        capture.status === 'imported' &&
+        capture.image?.base64 &&
+        capture.image.mimeType &&
+        !importedTetherCaptureIdsRef.current.has(capture.id),
+      )
+      .sort((a, b) => (a.importedAt || a.createdAt) - (b.importedAt || b.createdAt));
     if (newCaptures.length === 0) return;
 
     let isCancelled = false;
@@ -656,9 +658,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         if (freshImages.length === 0) return prev;
 
         const updatedImages = [...prev, ...freshImages];
-        if (prev.length === 0) {
-          setActiveImageIndex(0);
-        }
+        setActiveImageIndex(updatedImages.length - 1);
         saveProjectNow({
           targetImages: updatedImages,
           tether: buildTetherState({ importedCaptureIds: Array.from(importedTetherCaptureIdsRef.current) }),
@@ -1802,22 +1802,40 @@ Before outputting, verify:
                     </button>
                   </div>
 
-                  <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold text-[var(--color-text)]">Auto Edit</p>
-                      <p className="mt-1 text-[11px] leading-4 text-[var(--color-text-muted)]">Imports always save. Auto Edit queues new shots when DNA controls are ready.</p>
+                  <div className={`flex items-center justify-between gap-4 rounded-xl border px-3 py-3 transition-colors ${
+                    tetherAutoEdit
+                      ? 'border-[var(--color-accent)]/25 bg-[rgba(var(--color-accent-rgb),0.08)]'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface)]'
+                  }`}>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs font-semibold text-[var(--color-text)]">Auto Edit</p>
+                        <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none ${
+                          tetherAutoEdit
+                            ? 'border-[var(--color-accent)]/25 bg-[var(--color-accent)] text-black'
+                            : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)]'
+                        }`}>
+                          {tetherAutoEdit ? 'On' : 'Off'}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[11px] leading-4 text-[var(--color-text-muted)]">Imports always save. When enabled, ready captures queue automatically.</p>
                     </div>
                     <button
                       type="button"
                       onClick={() => handleTetherAutoEditChange(!tetherAutoEdit)}
-                      className={`relative h-6 w-11 flex-shrink-0 rounded-full border transition-colors ${
+                      disabled={isTetherBusy}
+                      role="switch"
+                      aria-label="Toggle tethered Auto Edit"
+                      className={`relative inline-flex h-8 w-[76px] flex-shrink-0 items-center rounded-full border px-1 text-[10px] font-black uppercase transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-black disabled:cursor-not-allowed disabled:opacity-50 ${
                         tetherAutoEdit
-                          ? 'border-[var(--color-accent)] bg-[var(--color-accent)]'
-                          : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)]'
+                          ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-black shadow-[0_0_22px_rgba(var(--color-accent-rgb),0.22)]'
+                          : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)]'
                       }`}
                       aria-pressed={tetherAutoEdit}
                     >
-                      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${tetherAutoEdit ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                      <span className={`absolute left-1 top-1 h-6 w-6 rounded-full bg-white shadow-lg transition-transform duration-200 ease-out ${tetherAutoEdit ? 'translate-x-[44px]' : 'translate-x-0'}`} />
+                      <span className={`pointer-events-none w-1/2 text-center transition-opacity ${tetherAutoEdit ? 'opacity-0' : 'opacity-100'}`}>Off</span>
+                      <span className={`pointer-events-none ml-auto w-1/2 text-center transition-opacity ${tetherAutoEdit ? 'opacity-100' : 'opacity-0'}`}>On</span>
                     </button>
                   </div>
 
