@@ -42,11 +42,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
+          $notesPath = "docs/releases/$tag.md"
+          if (Test-Path $notesPath) {
+            $notesArgs = @("--notes-file", $notesPath)
+          } else {
+            $notesArgs = @("--notes", "Download INSTALL-ISTUDIO.bat, place it where you want ISTUDIO installed, then double-click it.")
+          }
+
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag release/INSTALL-ISTUDIO.bat --clobber
+            gh release edit $tag @notesArgs
           } else {
-            gh release create $tag release/INSTALL-ISTUDIO.bat --title "ISTUDIO $tag" --notes "Download INSTALL-ISTUDIO.bat, place it where you want ISTUDIO installed, then double-click it."
+            gh release create $tag release/INSTALL-ISTUDIO.bat --title "ISTUDIO $tag" @notesArgs
           }
 
           $releases = gh api "repos/${{ github.repository }}/releases?per_page=100" | ConvertFrom-Json
