@@ -277,7 +277,10 @@ try {
       } else {
         & $launcherScript -Repo $Repo
       }
-      exit $LASTEXITCODE
+      if ($?) {
+        exit 0
+      }
+      exit 1
     } else {
       $launcherBat = Join-Path $InstallDir "LAUNCH.bat"
       Start-Process -FilePath $launcherBat -WorkingDirectory $InstallDir

@@ -24,7 +24,7 @@
   --color-bg-elevated: #0D0E10;
   --color-sidebar: #0D0E10;
   --color-header: rgba(13, 14, 16, 0.9);
-  --color-canvas: #07080A;
+  --color-viewport: #07080A;
   --color-card-warm: #1D1A14;
   --color-border: #292D31;
   --color-border-hover: #4A5258;
@@ -337,7 +337,7 @@ textarea:focus, input[type="text"]:focus, input[type="password"]:focus, select:f
 }
 
 .checkerboard-bg {
-  background-color: var(--color-canvas);
+  background-color: var(--color-viewport);
   background-image:
     linear-gradient(45deg, rgba(255,255,255,0.035) 25%, transparent 25%),
     linear-gradient(-45deg, rgba(255,255,255,0.035) 25%, transparent 25%),

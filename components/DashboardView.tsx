@@ -2,8 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowRight,
+  Box,
   Calendar,
-  CheckCircle2,
   FolderOpen,
   ImagePlus,
   Images,
@@ -81,7 +81,7 @@ const ProjectCard: React.FC<{
       className="group studio-panel-glow overflow-hidden rounded-xl premium-panel transition-colors hover:border-[var(--color-border-hover)]"
     >
       <button type="button" onClick={() => onOpen(project)} className="block w-full text-left">
-        <div className="relative aspect-[16/10] overflow-hidden bg-[var(--color-canvas)]">
+        <div className="relative aspect-[16/10] overflow-hidden bg-[var(--color-viewport)]">
           {coverImages.length > 0 ? (
             <div className={`grid h-full w-full ${coverImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'} gap-px`}>
               {coverImages.map((image, index) => (
@@ -179,7 +179,7 @@ const ReferenceTemplateGallery: React.FC<{
           className="group studio-panel-glow overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/84 text-left shadow-[var(--shadow-card)] hover:border-[var(--color-border-hover)]"
           aria-label={`Use ${template.title} as reference DNA`}
         >
-          <div className="relative aspect-[16/10] overflow-hidden bg-[var(--color-canvas)]">
+          <div className="relative aspect-[16/10] overflow-hidden bg-[var(--color-viewport)]">
             <img
               src={template.url}
               alt={template.title}
@@ -237,10 +237,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   );
 
   const totalOutputs = projects.reduce((sum, project) => sum + getProjectOutputCount(project), 0);
-  const canvasProjects = projects.filter((project) =>
+  const virtualSetProjects = projects.filter((project) =>
     project.summary
-      ? project.summary.canvasDocumentCount > 0
-      : Array.isArray(project.state?.canvas?.documents) && project.state.canvas.documents.length > 0
+      ? (project.summary.virtualSetSceneCount || 0) > 0
+      : Array.isArray(project.state?.virtualSet?.scenes) && project.state.virtualSet.scenes.length > 0
   );
   const featuredProject = useMemo(() => {
     if (sortedProjects.length === 0) return null;
@@ -383,9 +383,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       <Palette className="h-3.5 w-3.5 text-[var(--color-accent)]" />
                       Reference Edit
                     </button>
-                    <button type="button" onClick={() => onNavigate('canvas')} className="studio-chip inline-flex items-center gap-2 rounded-[12px] px-4 py-2 text-xs font-extrabold">
-                      <Layers className="h-3.5 w-3.5 text-[var(--color-accent-secondary)]" />
-                      Canvas
+                    <button type="button" onClick={() => onNavigate('virtual-set')} className="studio-chip inline-flex items-center gap-2 rounded-[12px] px-4 py-2 text-xs font-extrabold">
+                      <Box className="h-3.5 w-3.5 text-[var(--color-accent-secondary)]" />
+                      Virtual Set
                     </button>
                     <button type="button" onClick={onOpenProjectsFolder} disabled={storageInfo?.mode !== 'folder'} className="studio-chip inline-flex items-center gap-2 rounded-[12px] px-4 py-2 text-xs font-extrabold disabled:opacity-40">
                       <FolderOpen className="h-3.5 w-3.5 text-[var(--color-accent-tertiary)]" />
@@ -410,12 +410,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <section className="grid gap-4 sm:grid-cols-3">
           <StatCard label="Local projects" value={String(projects.length)} icon={<Layers className="h-4 w-4" />} />
           <StatCard label="Finished edits" value={String(totalOutputs)} icon={<Images className="h-4 w-4" />} accent="var(--color-accent-secondary)" />
-          <StatCard
-            label="Canvas designs"
-            value={String(canvasProjects.length)}
-            icon={<CheckCircle2 className="h-4 w-4" />}
-            accent="var(--color-accent-tertiary)"
-          />
+          <StatCard label="Virtual sets" value={String(virtualSetProjects.length)} icon={<Box className="h-4 w-4" />} accent="var(--color-accent-tertiary)" />
         </section>
 
         <section className="grid gap-4 lg:grid-cols-2">
@@ -441,18 +436,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <button
             type="button"
-            onClick={() => onNavigate('canvas')}
+            onClick={() => onNavigate('virtual-set')}
             disabled={!canCreateProjects}
             className="group studio-panel-glow rounded-2xl premium-panel p-5 text-left disabled:cursor-not-allowed disabled:opacity-40"
           >
             <div className="flex items-start justify-between gap-4">
               <div>
                 <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-sky-400/12 text-[var(--color-accent-secondary)]">
-                  <Layers className="h-5 w-5" />
+                  <Box className="h-5 w-5" />
                 </span>
-                <h2 className="mt-5 text-xl font-black text-[var(--color-text)]">Canvas</h2>
+                <h2 className="mt-5 text-xl font-black text-[var(--color-text)]">Virtual Set</h2>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-text-muted)]">
-                  Create single-page campaign layouts with editable image, text, shape, brush, template, and AI result layers.
+                  Build a 3D set, tune the sky and lighting, render a still, then use it as reference DNA or a virtual background.
                 </p>
               </div>
               <ArrowRight className="mt-2 h-5 w-5 text-[var(--color-accent-secondary)] transition-transform group-hover:translate-x-1" />

@@ -651,7 +651,10 @@ function Open-ProjectsFolder {
 if ($AutoLaunch) {
   Invoke-LaunchUpdateCheck
   Launch-IStudio
-  exit $LASTEXITCODE
+  if ($?) {
+    exit 0
+  }
+  exit 1
 }
 
 $script:UpdateState = Get-UpdateState -Quiet
@@ -672,7 +675,10 @@ while ($true) {
     "1" {
       Invoke-LaunchUpdateCheck
       Launch-IStudio
-      exit $LASTEXITCODE
+      if ($?) {
+        exit 0
+      }
+      exit 1
     }
     "2" {
       $script:UpdateState = Check-ForUpdates

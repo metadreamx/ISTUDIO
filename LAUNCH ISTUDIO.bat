@@ -5,10 +5,10 @@ title ISTUDIO
 set "ISTUDIO_SELF=%~f0"
 set "ISTUDIO_MODE=%~1"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $self=$env:ISTUDIO_SELF; $mode=$env:ISTUDIO_MODE; $script=[System.Text.StringBuilder]::new(); $capture=$false; foreach($line in [System.IO.File]::ReadLines($self)){ if($line -eq '__ISTUDIO_PAYLOAD_B64__'){ break }; if($capture){ [void]$script.AppendLine($line) }; if($line -eq '__ISTUDIO_SETUP_PS1__'){ $capture=$true } }; $block=[scriptblock]::Create($script.ToString()); & $block -Self $self -Mode $mode; exit $LASTEXITCODE"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { $self=$env:ISTUDIO_SELF; $mode=$env:ISTUDIO_MODE; $script=[System.Text.StringBuilder]::new(); $capture=$false; foreach($line in [System.IO.File]::ReadLines($self)){ if($line -eq '__ISTUDIO_PAYLOAD_B64__'){ break }; if($capture){ [void]$script.AppendLine($line) }; if($line -eq '__ISTUDIO_SETUP_PS1__'){ $capture=$true } }; $block=[scriptblock]::Create($script.ToString()); & $block -Self $self -Mode $mode; if($?){ exit 0 }; exit 1 } catch { Write-Host ''; Write-Host 'ISTUDIO setup error:' -ForegroundColor Red; Write-Host $_.Exception.Message; exit 1 }"
 if errorlevel 1 (
   echo.
-  echo ISTUDIO setup did not complete.
+  echo ISTUDIO setup did not complete. The error above explains what failed.
   pause
   exit /b 1
 )
@@ -228,7 +228,10 @@ function Start-IStudio {
   } else {
     & $launcherScript -AutoLaunch
   }
-  exit $LASTEXITCODE
+  if ($?) {
+    exit 0
+  }
+  exit 1
 }
 
 $showMenu = $false

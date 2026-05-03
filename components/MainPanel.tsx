@@ -391,7 +391,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
   return (
     <>
       <div 
-          className="relative flex h-full w-full flex-col overflow-hidden bg-[var(--color-canvas)]"
+          className="relative flex h-full w-full flex-col overflow-hidden bg-[var(--color-viewport)]"
           onDragEnter={handleDragEnter}
           onDragLeave={handleDragLeave}
           onDragOver={handleDragOver}
@@ -406,7 +406,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
           onChange={handleFileChange}
           multiple
         />
-        <div className="relative w-full aspect-square bg-[var(--color-canvas)] lg:min-h-0 lg:flex-1">
+        <div className="relative w-full aspect-square bg-[var(--color-viewport)] lg:min-h-0 lg:flex-1">
           <div className="lg:hidden absolute top-4 left-4 z-20 w-28 h-28">
               <ImageUploader
                   id="reference-image-mobile"
@@ -453,7 +453,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                 </TransformWrapper>
               </div>
 
-              <div className={`h-full w-full grid-cols-1 gap-4 bg-[var(--color-canvas)] p-4 sm:p-6 lg:p-8 md:grid-cols-2 ${viewMode === 'side-by-side' ? 'grid' : 'hidden'}`}>
+              <div className={`h-full w-full grid-cols-1 gap-4 bg-[var(--color-viewport)] p-4 sm:p-6 lg:p-8 md:grid-cols-2 ${viewMode === 'side-by-side' ? 'grid' : 'hidden'}`}>
                 <div className="group relative aspect-square overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl md:aspect-auto">
                   <TransformWrapper ref={originalSideRef} initialScale={1} centerOnInit={true} onTransformed={handleOriginalTransform}>
                     <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">

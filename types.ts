@@ -1,7 +1,7 @@
 
 // --- General App Types ---
 
-export type AppView = 'dashboard' | 'style-transfer' | 'canvas';
+export type AppView = 'dashboard' | 'style-transfer' | 'virtual-set';
 
 export interface ImageState {
   fileName: string | null;
@@ -27,7 +27,7 @@ export interface Project {
   summary?: {
     isSummary: boolean;
     outputCount: number;
-    canvasDocumentCount: number;
+    virtualSetSceneCount?: number;
   };
 }
 
@@ -66,125 +66,99 @@ export interface TetherProjectState {
   activeSessionStartedAt?: number | null;
 }
 
-// --- Canvas Tool ---
+// --- Virtual Set Studio ---
 
-export type CanvasTool = 'select' | 'image' | 'text' | 'shape' | 'brush' | 'hand';
-export type CanvasPanel = 'templates' | 'assets' | 'layers' | 'properties' | 'ai' | 'history';
-export type CanvasExportFormat = 'png' | 'jpeg' | 'webp';
-export type CanvasLayerType = 'image' | 'text' | 'shape' | 'brush' | 'group' | 'mask' | 'adjustment' | 'reference' | 'ai-result';
-export type CanvasImageFitMode = 'fit' | 'fill' | 'crop' | 'stretch';
+export type VirtualSetRuntimeState = 'unavailable' | 'stopped' | 'starting' | 'running' | 'error';
+export type VirtualSetObjectType = 'plane' | 'wall' | 'cube' | 'sphere' | 'cylinder' | 'backdrop' | 'platform' | 'image-plane';
+export type VirtualSetPreset = 'studio-cyc' | 'rooftop' | 'showroom' | 'warehouse' | 'fashion-set' | 'product-stage';
+export type VirtualSetSkyPreset = 'clear' | 'cloudy' | 'sunset' | 'night' | 'hdri';
 
-export interface CanvasImageCrop {
+export interface VirtualSetStatus {
+  state: VirtualSetRuntimeState;
+  runtimeAvailable: boolean;
+  streamUrl: string | null;
+  message: string;
+  projectId: string | null;
+  startedAt: number | null;
+  runtimePath?: string | null;
+}
+
+export interface VirtualSetTransform {
   x: number;
   y: number;
-  width: number;
-  height: number;
+  z: number;
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
 }
 
-export interface CanvasAsset {
+export interface VirtualSetObject {
   id: string;
   name: string;
-  image: ImageState;
-  createdAt: number;
+  type: VirtualSetObjectType;
+  visible: boolean;
+  locked: boolean;
+  color: string;
+  roughness: number;
+  metallic: number;
+  transform: VirtualSetTransform;
+  image?: ImageState | null;
 }
 
-export interface CanvasExport {
+export interface VirtualSetCamera {
+  focalLength: number;
+  x: number;
+  y: number;
+  z: number;
+  targetX: number;
+  targetY: number;
+  targetZ: number;
+}
+
+export interface VirtualSetLighting {
+  skyPreset: VirtualSetSkyPreset;
+  timeOfDay: number;
+  sunAngle: number;
+  sunIntensity: number;
+  fillIntensity: number;
+  rimIntensity: number;
+  colorTemperature: number;
+  fog: number;
+}
+
+export interface VirtualSetRender {
   id: string;
   name: string;
   dataUrl: string;
-  format: CanvasExportFormat;
+  mimeType: string;
   width: number;
   height: number;
   createdAt: number;
 }
 
-export interface CanvasLayerBase {
-  id: string;
-  type: CanvasLayerType;
-  name: string;
-  visible: boolean;
-  locked: boolean;
-  opacity: number;
-  blendMode?: GlobalCompositeOperation;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  rotation: number;
-}
-
-export interface CanvasImageLayer extends CanvasLayerBase {
-  type: 'image' | 'reference' | 'ai-result';
-  source: ImageState;
-  fitMode?: CanvasImageFitMode;
-  crop?: CanvasImageCrop | null;
-  naturalWidth?: number | null;
-  naturalHeight?: number | null;
-  flipX?: boolean;
-  flipY?: boolean;
-  brightness?: number;
-  contrast?: number;
-  saturation?: number;
-}
-
-export interface CanvasTextLayer extends CanvasLayerBase {
-  type: 'text';
-  text: string;
-  fontSize: number;
-  fontFamily: string;
-  fontStyle: 'normal' | 'bold' | 'italic' | 'bold italic';
-  fill: string;
-  align: 'left' | 'center' | 'right';
-  lineHeight: number;
-}
-
-export interface CanvasShapeLayer extends CanvasLayerBase {
-  type: 'shape';
-  shape: 'rect' | 'ellipse';
-  fill: string;
-  stroke: string;
-  strokeWidth: number;
-  cornerRadius?: number;
-}
-
-export interface CanvasBrushLayer extends CanvasLayerBase {
-  type: 'brush' | 'mask';
-  points: number[];
-  stroke: string;
-  strokeWidth: number;
-  tension: number;
-  tool?: 'paint' | 'erase' | 'mask';
-}
-
-export type CanvasLayer = CanvasImageLayer | CanvasTextLayer | CanvasShapeLayer | CanvasBrushLayer;
-
-export interface CanvasDocument {
+export interface VirtualSetScene {
   id: string;
   name: string;
+  preset: VirtualSetPreset;
   width: number;
   height: number;
-  background: string;
-  layers: CanvasLayer[];
-  assets: CanvasAsset[];
-  exports: CanvasExport[];
-  createdAt: number;
+  backgroundColor: string;
+  selectedObjectId: string | null;
+  objects: VirtualSetObject[];
+  camera: VirtualSetCamera;
+  lighting: VirtualSetLighting;
+  renders: VirtualSetRender[];
   updatedAt: number;
 }
 
-export interface CanvasProjectState {
-  activeDocumentId: string | null;
-  documents: CanvasDocument[];
-}
-
-export interface CanvasTemplate {
-  id: string;
-  title: string;
-  category: string;
-  description: string;
-  width: number;
-  height: number;
-  background: string;
-  layers: CanvasLayer[];
+export interface VirtualSetProjectState {
+  activeSceneId: string | null;
+  scenes: VirtualSetScene[];
+  lastRuntimeStatus?: VirtualSetStatus | null;
+  activeReferenceRenderId?: string | null;
 }
 
 export interface ReferenceTemplate {

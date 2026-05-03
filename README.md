@@ -2,14 +2,14 @@
 
 ![ISTUDIO reference edit workspace](docs/assets/istudio-reference-edit.jpg)
 
-ISTUDIO is a Windows-first creative app for reference-based photo editing and campaign design. Use one image as the visual DNA for another, then control background replacement, relighting, style transfer, element details, and export-ready results.
+ISTUDIO is a Windows-first creative app for reference-based photo editing. Use one image as the visual DNA for another, then control background replacement, relighting, style transfer, element details, and export-ready results.
 
 ## What ISTUDIO Does
 
 - **Reference Edit**: edit target photos from the lighting, background, mood, color, and style DNA of a reference image.
+- **Virtual Set**: build a 3D set, tune sky and lighting, render a still, then use it as reference DNA or a virtual background.
 - **Tethered Mode**: watch a camera capture folder and import new photos into a Reference Edit project automatically.
-- **Canvas**: create single-page designs with editable image, text, shape, brush, template, and AI result layers.
-- **Local projects**: save references, targets, generations, Canvas documents, exports, and settings in project folders on your computer.
+- **Local projects**: save references, targets, generations, virtual sets, tethered captures, exports, and settings in project folders on your computer.
 - **Automatic updates**: the launcher checks GitHub Releases every time ISTUDIO starts.
 
 ## Download And Install
@@ -45,8 +45,16 @@ The app will ask for the key when it is needed. The key stays on the user's comp
 2. The launcher checks for updates automatically.
 3. If a newer version is available, ISTUDIO updates first, then opens.
 4. Add your Google API key when prompted.
-5. Choose **Reference Edit** or **Canvas**.
+5. Open **Reference Edit** or **Virtual Set**.
 6. Create, save, refine, and export your work.
+
+### Virtual Set
+
+Virtual Set lets users compose a 3D scene inside ISTUDIO, adjust objects, camera, sky, lighting, fog, and render size, then save a still into the current project. A render can be sent directly into **Reference Edit** as the main reference DNA or as a controlled virtual background.
+
+ISTUDIO includes an in-app 3D preview and local project storage for Virtual Set scenes and renders. When the optional Unreal Virtual Set runtime is bundled in a release, ISTUDIO starts it locally and embeds the live Pixel Streaming viewport inside the same Virtual Set workspace.
+
+Developer/runtime integration details live in [`docs/UNREAL_VIRTUAL_SET_RUNTIME.md`](docs/UNREAL_VIRTUAL_SET_RUNTIME.md).
 
 ### Tethered Mode
 
@@ -74,7 +82,7 @@ Projects are saved inside the installed ISTUDIO folder:
 <folder with INSTALL-ISTUDIO.bat>\ISTUDIO\projects
 ```
 
-Each project gets its own folder with reference images, target photos, generated outputs, Canvas assets, exports, saved settings, and generation history. Project data stays on the user's computer.
+Each project gets its own folder with reference images, target photos, virtual set scenes/renders, tethered captures, generated outputs, exports, saved settings, and generation history. Project data stays on the user's computer.
 
 ### Moving Projects Between Computers
 

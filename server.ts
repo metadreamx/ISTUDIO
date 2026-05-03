@@ -3,13 +3,16 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
-import { spawn } from 'child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { createHash } from 'crypto';
 import chokidar, { type FSWatcher } from 'chokidar';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECTS_DIR = path.resolve(process.env.ISTUDIO_PROJECTS_DIR || path.join(process.cwd(), 'projects'));
+const VIRTUAL_SET_RUNTIME_DIR = path.resolve(process.env.ISTUDIO_UNREAL_RUNTIME_DIR || path.join(process.cwd(), 'virtual-set-runtime'));
+const VIRTUAL_SET_STREAM_URL = process.env.ISTUDIO_PIXEL_STREAMING_URL || 'http://127.0.0.1:4218';
+const VIRTUAL_SET_CONTROL_URL = process.env.ISTUDIO_UNREAL_CONTROL_URL || '';
 const PROJECT_JSON = 'project.json';
 const PROJECT_PAYLOAD_LIMIT = process.env.ISTUDIO_PROJECT_PAYLOAD_LIMIT || '2gb';
 const PROJECT_SCAN_MAX_DEPTH = 6;
@@ -106,6 +109,28 @@ type TetherSession = {
   startedAt: number;
 };
 
+type VirtualSetRuntimeState = 'unavailable' | 'stopped' | 'starting' | 'running' | 'error';
+
+type VirtualSetStatus = {
+  state: VirtualSetRuntimeState;
+  runtimeAvailable: boolean;
+  streamUrl: string | null;
+  message: string;
+  projectId: string | null;
+  startedAt: number | null;
+  runtimePath?: string | null;
+};
+
+type VirtualSetRenderPayload = {
+  projectId: string;
+  scene?: unknown;
+  dataUrl: string;
+  name?: string;
+  width?: number;
+  height?: number;
+  format?: 'png' | 'jpeg' | 'webp';
+};
+
 let tetherWatcher: FSWatcher | null = null;
 let tetherSession: TetherSession | null = null;
 let tetherMessage: string | null = null;
@@ -113,6 +138,13 @@ const tetherCaptures: TetherCapture[] = [];
 const tetherSeenSourceHashes = new Map<string, string>();
 const tetherSeenContentHashes = new Set<string>();
 const tetherImportTimers = new Map<string, NodeJS.Timeout>();
+let virtualSetProcess: ChildProcessWithoutNullStreams | null = null;
+let virtualSetProjectId: string | null = null;
+let virtualSetStartedAt: number | null = null;
+let virtualSetMessage = 'Unreal Virtual Set runtime has not been started.';
+let virtualSetLastError: string | null = null;
+let virtualSetStreamReady = false;
+let virtualSetLastStreamCheckAt = 0;
 
 function safeFilePart(value: string): string {
   const cleaned = value
@@ -171,11 +203,11 @@ function assetBucketForPath(segments: string[]): string {
     if (segments.at(-1) === 'target') return 'targets';
     if (segments.at(-1) === 'reference') return 'reference';
   }
-  if (segments.includes('canvas')) {
-    if (segments.includes('exports') || segments.at(-1) === 'dataUrl') return 'canvas/exports';
-    if (segments.includes('mask') || segments.includes('masks')) return 'canvas/masks';
-    if (segments.includes('thumbnail') || segments.includes('thumbnails')) return 'canvas/thumbnails';
-    return 'canvas/assets';
+  if (segments.includes('virtualSet')) {
+    if (segments.includes('renders') || segments.at(-1) === 'dataUrl') return 'virtual-set/renders';
+    if (segments.includes('thumbnail') || segments.includes('thumbnails')) return 'virtual-set/thumbnails';
+    if (segments.includes('scene') || segments.includes('scenes')) return 'virtual-set/scenes';
+    return 'virtual-set/assets';
   }
   if (segments.includes('imageEditor')) {
     if (segments.includes('exports')) return 'editor/exports';
@@ -380,11 +412,10 @@ async function ensureProjectAssetDirs(projectDir: string) {
     fs.mkdir(path.join(projectDir, 'editor', 'exports'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'editor', 'masks'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'editor', 'assets'), { recursive: true }),
-    fs.mkdir(path.join(projectDir, 'canvas', 'documents'), { recursive: true }),
-    fs.mkdir(path.join(projectDir, 'canvas', 'assets'), { recursive: true }),
-    fs.mkdir(path.join(projectDir, 'canvas', 'masks'), { recursive: true }),
-    fs.mkdir(path.join(projectDir, 'canvas', 'exports'), { recursive: true }),
-    fs.mkdir(path.join(projectDir, 'canvas', 'thumbnails'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'virtual-set', 'scenes'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'virtual-set', 'assets'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'virtual-set', 'renders'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'virtual-set', 'thumbnails'), { recursive: true }),
   ]);
 }
 
@@ -521,7 +552,7 @@ function getArrayAtPath(value: unknown, keys: string[]): unknown[] {
   return Array.isArray(current) ? current : [];
 }
 
-async function readProjectSummaryFromDirectory(projectDir: string): Promise<(StoredProject & { summary: { isSummary: true; outputCount: number; canvasDocumentCount: number } }) | null> {
+async function readProjectSummaryFromDirectory(projectDir: string): Promise<(StoredProject & { summary: { isSummary: true; outputCount: number; virtualSetSceneCount: number } }) | null> {
   const projectPath = path.join(projectDir, PROJECT_JSON);
   const project = await readRawProjectFile(projectPath) || await readImportedProjectFromFiles(projectDir);
   if (!project) return null;
@@ -529,7 +560,7 @@ async function readProjectSummaryFromDirectory(projectDir: string): Promise<(Sto
   const state = isRecord(project.state) ? project.state : {};
   const history = getArrayAtPath(state, ['generationHistory']);
   const targetImages = getArrayAtPath(state, ['targetImages']);
-  const canvasDocuments = getArrayAtPath(state, ['canvas', 'documents']);
+  const virtualSetScenes = getArrayAtPath(state, ['virtualSet', 'scenes']);
   const generatedImages = Array.isArray(project.generatedImages) ? project.generatedImages : [];
 
   return {
@@ -542,17 +573,17 @@ async function readProjectSummaryFromDirectory(projectDir: string): Promise<(Sto
     summary: {
       isSummary: true,
       outputCount: Math.max(history.length, generatedImages.length, targetImages.length),
-      canvasDocumentCount: canvasDocuments.length,
+      virtualSetSceneCount: virtualSetScenes.length,
     },
   };
 }
 
-async function readProjectSummaries(): Promise<(StoredProject & { summary: { isSummary: true; outputCount: number; canvasDocumentCount: number } })[]> {
+async function readProjectSummaries(): Promise<(StoredProject & { summary: { isSummary: true; outputCount: number; virtualSetSceneCount: number } })[]> {
   await migrateLegacyProjectFiles();
   const directories = await projectDirectories();
   const summaries = await Promise.all(directories.map(readProjectSummaryFromDirectory));
   return summaries
-    .filter((project): project is StoredProject & { summary: { isSummary: true; outputCount: number; canvasDocumentCount: number } } => project !== null)
+    .filter((project): project is StoredProject & { summary: { isSummary: true; outputCount: number; virtualSetSceneCount: number } } => project !== null)
     .sort((a, b) => b.lastModified - a.lastModified);
 }
 
@@ -699,6 +730,274 @@ function openFolder(folderPath: string) {
     return spawn('open', [folderPath], { detached: true, stdio: 'ignore' });
   }
   return spawn('xdg-open', [folderPath], { detached: true, stdio: 'ignore' });
+}
+
+function virtualSetRuntimeCandidates(): string[] {
+  const explicitRuntime = process.env.ISTUDIO_UNREAL_RUNTIME_EXE;
+  const candidates = [
+    explicitRuntime || '',
+    path.join(VIRTUAL_SET_RUNTIME_DIR, 'ISTUDIOVirtualSet.exe'),
+    path.join(VIRTUAL_SET_RUNTIME_DIR, 'ISTUDIOVirtualSetRuntime.exe'),
+    path.join(VIRTUAL_SET_RUNTIME_DIR, 'VirtualSetRuntime.exe'),
+    path.join(VIRTUAL_SET_RUNTIME_DIR, 'Windows', 'ISTUDIOVirtualSet.exe'),
+    path.join(VIRTUAL_SET_RUNTIME_DIR, 'Windows', 'ISTUDIOVirtualSetRuntime.exe'),
+    path.join(VIRTUAL_SET_RUNTIME_DIR, 'WindowsNoEditor', 'ISTUDIOVirtualSet.exe'),
+    path.join(VIRTUAL_SET_RUNTIME_DIR, 'WindowsNoEditor', 'ISTUDIOVirtualSetRuntime.exe'),
+  ];
+
+  return candidates.filter(Boolean);
+}
+
+function findVirtualSetRuntime(): string | null {
+  return virtualSetRuntimeCandidates().find((candidate) => existsSync(candidate)) || null;
+}
+
+function virtualSetStatus(): VirtualSetStatus {
+  const runtimePath = findVirtualSetRuntime();
+  const runtimeAvailable = Boolean(runtimePath);
+
+  if (!runtimeAvailable) {
+    return {
+      state: 'unavailable',
+      runtimeAvailable: false,
+      streamUrl: null,
+      message: `Unreal Virtual Set runtime is not bundled yet. Add it to ${VIRTUAL_SET_RUNTIME_DIR} to enable the live Unreal viewport.`,
+      projectId: virtualSetProjectId,
+      startedAt: null,
+      runtimePath: null,
+    };
+  }
+
+  if (virtualSetLastError) {
+    return {
+      state: 'error',
+      runtimeAvailable,
+      streamUrl: null,
+      message: virtualSetLastError,
+      projectId: virtualSetProjectId,
+      startedAt: virtualSetStartedAt,
+      runtimePath,
+    };
+  }
+
+  const isRunning = Boolean(virtualSetProcess && virtualSetProcess.exitCode === null);
+  const streamUrl = isRunning && virtualSetStreamReady ? VIRTUAL_SET_STREAM_URL : null;
+  return {
+    state: isRunning ? 'running' : 'stopped',
+    runtimeAvailable,
+    streamUrl,
+    message: isRunning && !streamUrl
+      ? `Unreal runtime is running, waiting for local Pixel Streaming at ${VIRTUAL_SET_STREAM_URL}. Showing the in-app 3D preview until the stream connects.`
+      : isRunning ? virtualSetMessage : 'Unreal Virtual Set runtime is ready to start.',
+    projectId: virtualSetProjectId,
+    startedAt: isRunning ? virtualSetStartedAt : null,
+    runtimePath,
+  };
+}
+
+async function refreshVirtualSetStreamAvailability(force = false) {
+  const isRunning = Boolean(virtualSetProcess && virtualSetProcess.exitCode === null);
+  if (!isRunning) {
+    virtualSetStreamReady = false;
+    return;
+  }
+
+  const now = Date.now();
+  if (!force && now - virtualSetLastStreamCheckAt < 1500) {
+    return;
+  }
+  virtualSetLastStreamCheckAt = now;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 900);
+  try {
+    const response = await fetch(VIRTUAL_SET_STREAM_URL, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    virtualSetStreamReady = response.ok || (response.status >= 200 && response.status < 500);
+    if (virtualSetStreamReady) {
+      virtualSetMessage = 'Unreal Virtual Set stream is connected.';
+    }
+  } catch {
+    virtualSetStreamReady = false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function startVirtualSetRuntime(projectId: string | null): Promise<VirtualSetStatus> {
+  const runtimePath = findVirtualSetRuntime();
+  if (!runtimePath) {
+    virtualSetProjectId = projectId;
+    virtualSetMessage = 'Unreal Virtual Set runtime is not bundled. ISTUDIO is using the in-app 3D preview.';
+    return virtualSetStatus();
+  }
+
+  if (virtualSetProcess && virtualSetProcess.exitCode === null) {
+    virtualSetProjectId = projectId || virtualSetProjectId;
+    virtualSetMessage = 'Unreal Virtual Set runtime is already running.';
+    await refreshVirtualSetStreamAvailability(true);
+    return virtualSetStatus();
+  }
+
+  virtualSetLastError = null;
+  virtualSetStreamReady = false;
+  virtualSetLastStreamCheckAt = 0;
+  virtualSetProjectId = projectId;
+  virtualSetStartedAt = Date.now();
+  virtualSetMessage = 'Starting Unreal Virtual Set runtime.';
+
+  const runtimeArgs = [
+    '-PixelStreamingIP=127.0.0.1',
+    '-PixelStreamingPort=8888',
+    '-RenderOffscreen',
+    '-Windowed',
+    '-ResX=1280',
+    '-ResY=720',
+  ];
+
+  virtualSetProcess = spawn(runtimePath, runtimeArgs, {
+    cwd: path.dirname(runtimePath),
+    windowsHide: true,
+  });
+
+  virtualSetProcess.stdout.on('data', (chunk) => {
+    const output = chunk.toString().trim();
+    if (output) virtualSetMessage = output.slice(-260);
+  });
+
+  virtualSetProcess.stderr.on('data', (chunk) => {
+    const output = chunk.toString().trim();
+    if (output) virtualSetMessage = output.slice(-260);
+  });
+
+  virtualSetProcess.on('error', (error) => {
+    virtualSetLastError = error.message;
+    virtualSetMessage = error.message;
+  });
+
+  virtualSetProcess.on('exit', (code) => {
+    virtualSetMessage = code === 0
+      ? 'Unreal Virtual Set runtime stopped.'
+      : `Unreal Virtual Set runtime stopped with code ${code ?? 'unknown'}.`;
+    virtualSetProcess = null;
+    virtualSetStartedAt = null;
+  });
+
+  virtualSetMessage = 'Unreal Virtual Set runtime is launching. The viewport will connect when Pixel Streaming is ready.';
+  await refreshVirtualSetStreamAvailability(true);
+  return virtualSetStatus();
+}
+
+async function stopVirtualSetRuntime(): Promise<VirtualSetStatus> {
+  if (virtualSetProcess && virtualSetProcess.exitCode === null) {
+    virtualSetProcess.kill();
+  }
+  virtualSetProcess = null;
+  virtualSetStartedAt = null;
+  virtualSetStreamReady = false;
+  virtualSetMessage = 'Unreal Virtual Set runtime stopped.';
+  return virtualSetStatus();
+}
+
+async function sendVirtualSetCommand(command: unknown) {
+  if (!VIRTUAL_SET_CONTROL_URL) {
+    return {
+      ok: false,
+      status: virtualSetStatus(),
+      message: 'Unreal command bridge is not configured. The in-app 3D preview handled this command locally.',
+    };
+  }
+
+  const response = await fetch(VIRTUAL_SET_CONTROL_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(command),
+  });
+  if (!response.ok) {
+    throw new Error(`Unreal command bridge returned ${response.status}.`);
+  }
+  return {
+    ok: true,
+    status: virtualSetStatus(),
+    result: await response.json().catch(() => null),
+  };
+}
+
+async function writeVirtualSetScene(projectDir: string, scene: unknown) {
+  if (!scene) return null;
+  const sceneId = isRecord(scene) && typeof scene.id === 'string' ? safeFilePart(scene.id) : `scene-${Date.now()}`;
+  const scenePath = path.join(projectDir, 'virtual-set', 'scenes', `${sceneId}.json`);
+  await fs.mkdir(path.dirname(scenePath), { recursive: true });
+  await fs.writeFile(scenePath, JSON.stringify(scene, null, 2), 'utf8');
+  return relativeAssetPath(projectDir, scenePath);
+}
+
+async function writeVirtualSetRender(payload: VirtualSetRenderPayload) {
+  const projectDir = await findProjectDir(payload.projectId);
+  if (!projectDir) {
+    throw new Error('Project not found. Create a project before rendering a virtual set.');
+  }
+
+  const parsed = parseDataUrl(payload.dataUrl);
+  if (!parsed) {
+    throw new Error('Virtual Set render payload must be a data URL.');
+  }
+
+  await ensureProjectAssetDirs(projectDir);
+  const scenePath = await writeVirtualSetScene(projectDir, payload.scene);
+  const renderId = `virtual-set-render-${Date.now()}`;
+  const baseName = payload.name || renderId;
+  const targetDir = path.join(projectDir, 'virtual-set', 'renders');
+  const targetPath = path.join(targetDir, assetFileName(baseName, parsed.mimeType, parsed.base64));
+  await fs.mkdir(targetDir, { recursive: true });
+  if (!existsSync(targetPath)) {
+    await fs.writeFile(targetPath, Buffer.from(parsed.base64, 'base64'));
+  }
+
+  return {
+    id: renderId,
+    name: baseName,
+    dataUrl: payload.dataUrl,
+    mimeType: parsed.mimeType,
+    width: payload.width || null,
+    height: payload.height || null,
+    createdAt: Date.now(),
+    assetPath: relativeAssetPath(projectDir, targetPath),
+    scenePath,
+    image: {
+      fileName: path.basename(targetPath),
+      base64: parsed.base64,
+      mimeType: parsed.mimeType,
+      width: payload.width || null,
+      height: payload.height || null,
+      assetPath: relativeAssetPath(projectDir, targetPath),
+    },
+  };
+}
+
+async function useVirtualSetRenderAsReference(projectId: string, image: StoredImageState) {
+  const projectDir = await findProjectDir(projectId);
+  if (!projectDir) {
+    throw new Error('Project not found.');
+  }
+  const project = await readProjectFromDirectory(projectDir);
+  if (!project) {
+    throw new Error('Project not found.');
+  }
+
+  const state = isRecord(project.state) ? project.state : {};
+  const updatedProject: StoredProject = {
+    ...project,
+    lastModified: Date.now(),
+    state: {
+      ...state,
+      referenceImage: image,
+    },
+  };
+  await writeProject(updatedProject);
+  return readProjectFromDirectory(projectDir);
 }
 
 function tetherStatus(options: { includeImages?: boolean; knownCaptureIds?: Set<string> } = {}) {
@@ -1130,6 +1429,76 @@ async function startServer() {
     } catch (error) {
       console.error('Failed to stop tethered capture', error);
       res.status(500).json({ error: 'Failed to stop Tethered Mode.' });
+    }
+  });
+
+  app.get('/api/virtual-set/status', async (_req, res) => {
+    await refreshVirtualSetStreamAvailability();
+    res.json(virtualSetStatus());
+  });
+
+  app.post('/api/virtual-set/start', async (req, res) => {
+    try {
+      const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : null;
+      if (projectId) {
+        const projectDir = await findProjectDir(projectId);
+        if (!projectDir) {
+          res.status(404).json({ error: 'Project not found.' });
+          return;
+        }
+        await ensureProjectAssetDirs(projectDir);
+      }
+      res.json(await startVirtualSetRuntime(projectId));
+    } catch (error) {
+      console.error('Failed to start Virtual Set runtime', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to start Virtual Set.' });
+    }
+  });
+
+  app.post('/api/virtual-set/stop', async (_req, res) => {
+    try {
+      res.json(await stopVirtualSetRuntime());
+    } catch (error) {
+      console.error('Failed to stop Virtual Set runtime', error);
+      res.status(500).json({ error: 'Failed to stop Virtual Set.' });
+    }
+  });
+
+  app.post('/api/virtual-set/command', async (req, res) => {
+    try {
+      res.json(await sendVirtualSetCommand(req.body));
+    } catch (error) {
+      console.error('Failed to send Virtual Set command', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to send Virtual Set command.' });
+    }
+  });
+
+  app.post('/api/virtual-set/render', async (req, res) => {
+    try {
+      const payload = req.body as VirtualSetRenderPayload;
+      if (!payload?.projectId || !payload.dataUrl) {
+        res.status(400).json({ error: 'Project ID and render data are required.' });
+        return;
+      }
+      res.json(await writeVirtualSetRender(payload));
+    } catch (error) {
+      console.error('Failed to save Virtual Set render', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to save Virtual Set render.' });
+    }
+  });
+
+  app.post('/api/virtual-set/use-as-reference', async (req, res) => {
+    try {
+      const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+      const image = req.body?.image as StoredImageState | undefined;
+      if (!projectId || !image?.mimeType || (!image.base64 && !image.assetPath)) {
+        res.status(400).json({ error: 'Project ID and rendered image are required.' });
+        return;
+      }
+      res.json(await useVirtualSetRenderAsReference(projectId, image));
+    } catch (error) {
+      console.error('Failed to use Virtual Set render as reference', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to use render as reference.' });
     }
   });
 

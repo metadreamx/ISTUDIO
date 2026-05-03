@@ -1,4 +1,4 @@
-import type { HistoryItem, Project, TetherStatus } from '../types';
+import type { HistoryItem, ImageState, Project, TetherStatus, VirtualSetStatus } from '../types';
 
 const DB_NAME = 'StyleTransferDB';
 const DB_VERSION = 3; // Incremented version to add twins store
@@ -7,6 +7,7 @@ const PROJECTS_STORE = 'projects';
 const PROJECTS_API = '/api/projects';
 const PROJECTS_FOLDER_API = '/api/projects-folder';
 const TETHER_API = '/api/tether';
+const VIRTUAL_SET_API = '/api/virtual-set';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -199,6 +200,63 @@ export async function stopTetherSession(): Promise<TetherStatus> {
     return await apiRequest<TetherStatus>(`${TETHER_API}/stop`, {
         method: 'POST',
     }, 30000);
+}
+
+export async function getVirtualSetStatus(): Promise<VirtualSetStatus> {
+    return await apiRequest<VirtualSetStatus>(`${VIRTUAL_SET_API}/status`, undefined, 10000);
+}
+
+export async function startVirtualSetRuntime(projectId: string | null): Promise<VirtualSetStatus> {
+    return await apiRequest<VirtualSetStatus>(`${VIRTUAL_SET_API}/start`, {
+        method: 'POST',
+        body: JSON.stringify({ projectId }),
+    }, 30000);
+}
+
+export async function stopVirtualSetRuntime(): Promise<VirtualSetStatus> {
+    return await apiRequest<VirtualSetStatus>(`${VIRTUAL_SET_API}/stop`, {
+        method: 'POST',
+    }, 30000);
+}
+
+export async function sendVirtualSetCommand(command: unknown): Promise<{ ok: boolean; status: VirtualSetStatus; message?: string; result?: unknown }> {
+    return await apiRequest<{ ok: boolean; status: VirtualSetStatus; message?: string; result?: unknown }>(`${VIRTUAL_SET_API}/command`, {
+        method: 'POST',
+        body: JSON.stringify(command),
+    }, 30000);
+}
+
+export async function saveVirtualSetRender(input: {
+    projectId: string;
+    scene: unknown;
+    dataUrl: string;
+    name: string;
+    width: number;
+    height: number;
+    format: 'png' | 'jpeg' | 'webp';
+}): Promise<{
+    id: string;
+    name: string;
+    dataUrl: string;
+    mimeType: string;
+    width: number | null;
+    height: number | null;
+    createdAt: number;
+    assetPath: string;
+    scenePath: string | null;
+    image: ImageState;
+}> {
+    return await apiRequest(`${VIRTUAL_SET_API}/render`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+    }, 120000);
+}
+
+export async function useVirtualSetRenderAsReference(projectId: string, image: ImageState): Promise<Project> {
+    return await apiRequest<Project>(`${VIRTUAL_SET_API}/use-as-reference`, {
+        method: 'POST',
+        body: JSON.stringify({ projectId, image }),
+    }, 120000);
 }
 
 async function getIndexedDbProjects(): Promise<Project[]> {

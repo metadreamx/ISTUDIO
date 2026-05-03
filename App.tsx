@@ -9,7 +9,7 @@ import { ApiKeyModal } from '@/components/ApiKeyModal';
 import { 
   LayoutDashboardIcon, 
   PaletteIcon, 
-  LayersIcon,
+  BoxIcon,
   SettingsIcon, 
   HelpCircleIcon,
   XIcon,
@@ -20,7 +20,7 @@ import {
 
 const DashboardView = lazy(() => import('@/components/DashboardView').then((module) => ({ default: module.DashboardView })));
 const StyleTransferView = lazy(() => import('@/components/StyleTransferView').then((module) => ({ default: module.StyleTransferView })));
-const CanvasView = lazy(() => import('@/components/CanvasView').then((module) => ({ default: module.CanvasView })));
+const VirtualSetView = lazy(() => import('@/components/VirtualSetView').then((module) => ({ default: module.VirtualSetView })));
 
 declare global {
   interface Window {
@@ -344,9 +344,9 @@ const App: React.FC = () => {
       const fullProject = project.summary?.isSummary ? await getProject(project.id) : project;
       setCurrentProject(fullProject);
       setProjects(prev => prev.map(item => item.id === fullProject.id ? fullProject : item));
-      const hasCanvasDocument = Array.isArray(fullProject.state?.canvas?.documents) && fullProject.state.canvas.documents.length > 0;
+      const hasVirtualSetState = Array.isArray(fullProject.state?.virtualSet?.scenes) && fullProject.state.virtualSet.scenes.length > 0;
       const hasReferenceEditState = Boolean(fullProject.state?.referenceImage || fullProject.state?.targetImages?.length);
-      setActiveView(hasCanvasDocument && !hasReferenceEditState ? 'canvas' : 'style-transfer');
+      setActiveView(hasVirtualSetState && !hasReferenceEditState ? 'virtual-set' : 'style-transfer');
     } catch (error) {
       console.error("Failed to open project", error);
       setToast("Could not open project");
@@ -388,6 +388,72 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const handleUseVirtualSetRender = useCallback(async (image: ImageState, mode: 'reference' | 'background') => {
+    const backgroundItem = {
+      image,
+      analysis: 'A rendered ISTUDIO Virtual Set background. Preserve the camera angle, lighting direction, atmosphere, and spatial depth from this render when replacing the scene.',
+      enabled: true,
+      status: 'ready' as const,
+    };
+
+    if (currentProject) {
+      const updatedProject: Project = {
+        ...currentProject,
+        lastModified: Date.now(),
+        state: {
+          ...(currentProject.state || {}),
+          ...(mode === 'reference'
+            ? { referenceImage: image }
+            : { customBackgroundItem: backgroundItem }),
+        },
+      };
+      await handleUpdateProject(updatedProject);
+      setCurrentProject(updatedProject);
+      setActiveView('style-transfer');
+      setToast(mode === 'reference' ? 'Virtual set loaded as reference DNA' : 'Virtual set loaded as background control');
+      return;
+    }
+
+    if (mode === 'reference') {
+      setPendingReferenceTemplate(image);
+      setActiveView('style-transfer');
+      setToast('Virtual set loaded as reference DNA');
+      return;
+    }
+
+    const project = await createProject('Virtual Set Background Edit', 'style-transfer', {
+      customBackgroundItem: backgroundItem,
+    });
+    if (project) {
+      setToast('Virtual set loaded as background control');
+    }
+  }, [createProject, currentProject, handleUpdateProject]);
+
+  const renderApiKeyRequired = () => (
+    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+      <div className="max-w-md space-y-6">
+        <div className="mx-auto mb-8 flex h-20 w-20 items-center justify-center rounded-2xl bg-[var(--color-accent)]/10 shadow-[0_0_30px_var(--color-accent-glow)]">
+          <SettingsIcon className="w-10 h-10 text-[var(--color-accent)]" />
+        </div>
+        <h2 className="text-3xl font-bold">Connect AI to unlock reference editing</h2>
+        <p className="text-[var(--color-text-muted)] leading-relaxed">
+          ISTUDIO reads the visual DNA of a reference photo, then uses it for background replacement, relighting, style transfer, and controlled image edits.
+        </p>
+        <div className="pt-4">
+          <button
+            onClick={handleOpenSelectKey}
+            className="primary-cta px-10 py-4 text-sm font-semibold flex items-center gap-3 mx-auto"
+          >
+            Select API key
+          </button>
+        </div>
+        <p className="text-xs text-[var(--color-text-muted)] pt-4">
+          Learn more about <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-[var(--color-accent)] hover:underline">Gemini API billing</a>.
+        </p>
+      </div>
+    </div>
+  );
+
   const renderContent = () => {
     if (isLoading) {
         return (
@@ -395,33 +461,6 @@ const App: React.FC = () => {
                 <SpinnerIcon className="w-10 h-10 animate-spin text-[var(--color-accent)]" />
             </div>
         );
-    }
-
-    if (!hasApiKey) {
-      return (
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-          <div className="max-w-md space-y-6">
-            <div className="mx-auto mb-8 flex h-20 w-20 items-center justify-center rounded-2xl bg-[var(--color-accent)]/10 shadow-[0_0_30px_var(--color-accent-glow)]">
-              <SettingsIcon className="w-10 h-10 text-[var(--color-accent)]" />
-            </div>
-            <h2 className="text-3xl font-bold">Connect AI to unlock reference editing</h2>
-            <p className="text-[var(--color-text-muted)] leading-relaxed">
-              ISTUDIO reads the visual DNA of a reference photo, then uses it for background replacement, relighting, style transfer, and controlled image edits.
-            </p>
-            <div className="pt-4">
-              <button 
-                onClick={handleOpenSelectKey}
-                className="primary-cta px-10 py-4 text-sm font-semibold flex items-center gap-3 mx-auto"
-              >
-                Select API key
-              </button>
-            </div>
-            <p className="text-xs text-[var(--color-text-muted)] pt-4">
-              Learn more about <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-[var(--color-accent)] hover:underline">Gemini API billing</a>.
-            </p>
-          </div>
-        </div>
-      );
     }
     
     return (
@@ -454,7 +493,7 @@ const App: React.FC = () => {
               onSelectReferenceTemplate={handleSelectReferenceTemplate}
             />
           )}
-          {activeView === 'style-transfer' && (
+          {activeView === 'style-transfer' && (hasApiKey ? (
             <StyleTransferView 
               project={currentProject}
               onUpdateProject={handleUpdateProject}
@@ -462,13 +501,14 @@ const App: React.FC = () => {
               referenceTemplate={pendingReferenceTemplate}
               onReferenceTemplateConsumed={() => setPendingReferenceTemplate(null)}
             />
-          )}
-          {activeView === 'canvas' && (
-            <CanvasView
+          ) : renderApiKeyRequired())}
+          {activeView === 'virtual-set' && (
+            <VirtualSetView
               project={currentProject}
               onUpdateProject={handleUpdateProject}
-              onCreateProject={(name, initialState) => createProject(name, 'canvas', initialState)}
+              onCreateProject={(name, initialState) => createProject(name, 'virtual-set', initialState)}
               canCreateProjects={Boolean(projectStorageInfo)}
+              onUseRender={handleUseVirtualSetRender}
             />
           )}
         </motion.div>
@@ -492,7 +532,7 @@ const App: React.FC = () => {
         <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar">
           <NavButton view="dashboard" label="Explore" icon={<LayoutDashboardIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
           <NavButton view="style-transfer" label="Reference Edit" icon={<PaletteIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} badge="Pro" />
-          <NavButton view="canvas" label="Canvas" icon={<LayersIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
+          <NavButton view="virtual-set" label="Virtual Set" icon={<BoxIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
         </nav>
 
         <div className="flex shrink-0 items-center gap-2">

@@ -490,9 +490,12 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
   const refreshTetherStatus = useCallback(async () => {
     try {
+      const knownCaptureIds = Array.from(importedTetherCaptureIdsRef.current)
+        .filter((id): id is string => typeof id === 'string')
+        .slice(-120);
       setTetherStatus(await getTetherStatus({
         includeImages: true,
-        knownCaptureIds: Array.from(importedTetherCaptureIdsRef.current).slice(-120),
+        knownCaptureIds,
       }));
     } catch (error) {
       console.warn('Could not refresh Tethered Mode status.', error);

@@ -21,13 +21,13 @@ export default defineConfig(({ mode }) => {
         }
       },
       build: {
+        chunkSizeWarningLimit: 700,
         rollupOptions: {
           output: {
             manualChunks(id) {
               if (id.includes('node_modules')) {
                 if (id.includes('react') || id.includes('scheduler')) return 'vendor-react';
-                if (id.includes('konva') || id.includes('react-konva')) return 'vendor-canvas';
-                if (id.includes('@dnd-kit')) return 'vendor-dnd';
+                if (id.includes('three')) return 'vendor-3d';
                 if (id.includes('@google/genai')) return 'vendor-ai';
                 if (id.includes('motion') || id.includes('lucide-react')) return 'vendor-ui';
               }
