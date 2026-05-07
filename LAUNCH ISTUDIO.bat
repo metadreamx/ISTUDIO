@@ -22,6 +22,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $script:SetupHeaderTitle = "ISTUDIO Installer"
+$script:Repo = "metadreamx/ISTUDIO"
+$script:InstallerReleaseTag = "__ISTUDIO_RELEASE_TAG__"
+$script:Headers = @{ "User-Agent" = "ISTUDIO-Installer" }
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function Write-SetupHeader {
   param([string]$Subtitle)
@@ -71,6 +75,114 @@ function Test-IStudioInstall {
   return $true
 }
 
+function ConvertTo-Version {
+  param([string]$Value)
+
+  $clean = ($Value -replace "^v", "") -replace "[^\d.].*$", ""
+  if ([string]::IsNullOrWhiteSpace($clean)) {
+    return [version]"0.0.0"
+  }
+
+  try {
+    return [version]$clean
+  } catch {
+    return [version]"0.0.0"
+  }
+}
+
+function Get-InstallerVersion {
+  if ([string]::IsNullOrWhiteSpace($script:InstallerReleaseTag) -or $script:InstallerReleaseTag -like "__*__") {
+    return "0.0.0"
+  }
+  return $script:InstallerReleaseTag
+}
+
+function Get-InstalledVersion {
+  param([string]$InstallDir)
+
+  $releasePath = Join-Path $InstallDir ".istudio-release"
+  if (Test-Path $releasePath) {
+    try {
+      $value = (Get-Content -LiteralPath $releasePath -Raw).Trim()
+      if (-not [string]::IsNullOrWhiteSpace($value)) {
+        return $value
+      }
+    } catch {
+      # Fall back to package.json below.
+    }
+  }
+
+  $packagePath = Join-Path $InstallDir "package.json"
+  if (Test-Path $packagePath) {
+    try {
+      $package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
+      if ($package.version) {
+        return [string]$package.version
+      }
+    } catch {
+      # Unknown install version.
+    }
+  }
+
+  return "0.0.0"
+}
+
+function Get-LatestRelease {
+  try {
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$script:Repo/releases/latest" -Headers $script:Headers -TimeoutSec 10
+    return [pscustomobject]@{
+      Status = "ok"
+      Release = $release
+      Message = $null
+    }
+  } catch {
+    $statusCode = $null
+    if ($_.Exception.Response) {
+      $statusCode = [int]$_.Exception.Response.StatusCode
+    }
+
+    return [pscustomobject]@{
+      Status = if ($statusCode -eq 404) { "no-release" } else { "unavailable" }
+      Release = $null
+      Message = $_.Exception.Message
+    }
+  }
+}
+
+function Get-ReleaseInstallerAsset {
+  param([object]$Release)
+
+  if (-not $Release -or -not $Release.assets) {
+    return $null
+  }
+
+  $asset = $Release.assets | Where-Object { $_.name -eq "INSTALL-ISTUDIO.bat" } | Select-Object -First 1
+  if (-not $asset) {
+    $asset = $Release.assets | Where-Object { $_.name -like "*.bat" } | Select-Object -First 1
+  }
+  return $asset
+}
+
+function Test-IStudioInstallerFile {
+  param([string]$InstallerPath)
+
+  if (-not (Test-Path $InstallerPath)) {
+    return $false
+  }
+
+  $hasScript = $false
+  $hasPayload = $false
+  foreach ($line in [System.IO.File]::ReadLines($InstallerPath)) {
+    if ($line -eq "__ISTUDIO_SETUP_PS1__") {
+      $hasScript = $true
+    } elseif ($line -eq "__ISTUDIO_PAYLOAD_B64__") {
+      $hasPayload = $true
+      break
+    }
+  }
+  return $hasScript -and $hasPayload
+}
+
 function Get-InstallDirectory {
   param([string]$InstallerPath)
 
@@ -109,6 +221,97 @@ function Remove-LocalSetupTemp {
 
   if ($SetupTemp -and $SetupTemp.Root -and (Test-Path $SetupTemp.Root)) {
     Remove-Item -LiteralPath $SetupTemp.Root -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Invoke-InstallerSelfUpdate {
+  param(
+    [string]$InstallerPath,
+    [string]$InstallDir,
+    [string]$Mode
+  )
+
+  if ([System.IO.Path]::GetFileName($InstallerPath) -ne "INSTALL-ISTUDIO.bat") {
+    Write-Step -Number 1 -Total 1 -Message "Using local installer file"
+    Write-Host "Installer self-update runs from the public INSTALL-ISTUDIO.bat release file." -ForegroundColor DarkGray
+    return
+  }
+
+  Write-Step -Number 1 -Total 2 -Message "Checking for the latest ISTUDIO installer"
+  $latest = Get-LatestRelease
+  if ($latest.Status -ne "ok") {
+    if ($latest.Status -eq "no-release") {
+      Write-Host "No published ISTUDIO release was found yet. Continuing with this installer." -ForegroundColor DarkYellow
+    } else {
+      Write-Host "Could not check GitHub Releases. Continuing with this installer." -ForegroundColor DarkYellow
+      if ($latest.Message) {
+        Write-Host $latest.Message -ForegroundColor DarkGray
+      }
+    }
+    return
+  }
+
+  $latestTag = [string]$latest.Release.tag_name
+  $latestVersion = ConvertTo-Version $latestTag
+  $installerVersion = ConvertTo-Version (Get-InstallerVersion)
+  $installedVersion = if (Test-IStudioInstall -Path $InstallDir) {
+    ConvertTo-Version (Get-InstalledVersion -InstallDir $InstallDir)
+  } else {
+    [version]"0.0.0"
+  }
+
+  Write-Host ("Latest release    : {0}" -f $latestTag) -ForegroundColor Green
+  Write-Host ("Installer version : {0}" -f (Get-InstallerVersion)) -ForegroundColor Gray
+  if (Test-IStudioInstall -Path $InstallDir) {
+    Write-Host ("Installed version : {0}" -f (Get-InstalledVersion -InstallDir $InstallDir)) -ForegroundColor Gray
+  }
+
+  if ($latestVersion -le $installerVersion) {
+    return
+  }
+
+  $asset = Get-ReleaseInstallerAsset -Release $latest.Release
+  if (-not $asset) {
+    Write-Host "The latest release does not include INSTALL-ISTUDIO.bat. Continuing with this installer." -ForegroundColor Yellow
+    return
+  }
+
+  Write-Step -Number 2 -Total 2 -Message "Downloading the newest one-click installer"
+  $setupTemp = $null
+  try {
+    $setupTemp = New-LocalSetupTemp -InstallerPath $InstallerPath
+    $downloadPath = Join-Path $setupTemp.Work "INSTALL-ISTUDIO.bat"
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $downloadPath -Headers $script:Headers -TimeoutSec 120
+
+    if (-not (Test-IStudioInstallerFile -InstallerPath $downloadPath)) {
+      throw "The downloaded installer did not pass validation."
+    }
+
+    Copy-Item -LiteralPath $downloadPath -Destination $InstallerPath -Force
+    Remove-LocalSetupTemp -SetupTemp $setupTemp
+    $setupTemp = $null
+
+    Write-Host ""
+    Write-Host "Installer updated. Restarting with the latest ISTUDIO setup..." -ForegroundColor Green
+    Write-Host ""
+    Start-Sleep -Milliseconds 700
+
+    if ([string]::IsNullOrWhiteSpace($Mode)) {
+      & $InstallerPath
+    } else {
+      & $InstallerPath $Mode
+    }
+    exit $LASTEXITCODE
+  } catch {
+    Write-Host "Could not self-update the installer. Continuing with this installer." -ForegroundColor Yellow
+    Write-Host $_.Exception.Message -ForegroundColor DarkGray
+  } finally {
+    Remove-LocalSetupTemp -SetupTemp $setupTemp
+  }
+
+  if ((Test-IStudioInstall -Path $InstallDir) -and $latestVersion -gt $installedVersion) {
+    Write-Host "The installed app is older than GitHub Releases, but installer self-update was unavailable." -ForegroundColor Yellow
+    Write-Host "This installer will still launch the installed app. Download the latest INSTALL-ISTUDIO.bat if the update does not apply." -ForegroundColor DarkGray
   }
 }
 
@@ -251,10 +454,24 @@ Write-Host ""
 Write-Host "To install somewhere else, close this window, move INSTALL-ISTUDIO.bat to the folder you want, then run it again." -ForegroundColor DarkGray
 Write-Host ""
 
-if (Test-IStudioInstall -Path $installDir) {
+Invoke-InstallerSelfUpdate -InstallerPath $Self -InstallDir $installDir -Mode $Mode
+Write-Host ""
+
+$installerVersionForInstall = ConvertTo-Version (Get-InstallerVersion)
+$installedVersionForInstall = if (Test-IStudioInstall -Path $installDir) {
+  ConvertTo-Version (Get-InstalledVersion -InstallDir $installDir)
+} else {
+  [version]"0.0.0"
+}
+
+if ((Test-IStudioInstall -Path $installDir) -and $installedVersionForInstall -ge $installerVersionForInstall) {
   Write-Step -Number 1 -Total 1 -Message "ISTUDIO is already installed. Launching..."
   Start-Sleep -Milliseconds 500
   Start-IStudio -InstallDir $installDir -ShowMenu:$showMenu
+}
+
+if (Test-IStudioInstall -Path $installDir) {
+  Write-Step -Number 1 -Total 5 -Message "Updating installed ISTUDIO files from this installer"
 }
 
 $setupTemp = $null

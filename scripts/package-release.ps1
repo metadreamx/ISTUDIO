@@ -47,6 +47,7 @@ function Write-ReleaseInstaller {
     [string]$Source,
     [string]$Destination,
     [string]$Repo,
+    [string]$ReleaseTag,
     [string]$PackageZip
   )
 
@@ -54,6 +55,9 @@ function Write-ReleaseInstaller {
   if (-not [string]::IsNullOrWhiteSpace($Repo)) {
     $content = $content.Replace("YOUR_GITHUB_USERNAME/ISTUDIO", $Repo)
     $content = $content.Replace("metadreamx/ISTUDIO", $Repo)
+  }
+  if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) {
+    $content = $content.Replace("__ISTUDIO_RELEASE_TAG__", $ReleaseTag)
   }
   Set-Content -LiteralPath $Destination -Value $content -Encoding ascii
 
@@ -229,7 +233,7 @@ try {
     throw "Release zip was not created correctly."
   }
 
-  Write-ReleaseInstaller -Source (Join-Path $root "LAUNCH ISTUDIO.bat") -Destination $batPath -Repo $Repo -PackageZip $zipPath
+  Write-ReleaseInstaller -Source (Join-Path $root "LAUNCH ISTUDIO.bat") -Destination $batPath -Repo $Repo -ReleaseTag $ReleaseTag -PackageZip $zipPath
 
   $staleReleaseAssets = @(
     "ISTUDIO.bat",

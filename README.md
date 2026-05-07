@@ -25,9 +25,11 @@ Then:
 1. Move `INSTALL-ISTUDIO.bat` to the folder where you want ISTUDIO installed.
    Good choices are Desktop, Documents, or an external drive.
 2. Double-click `INSTALL-ISTUDIO.bat`.
-3. ISTUDIO creates an `ISTUDIO` folder beside the BAT file.
-4. The installer sets up the complete app and starts ISTUDIO.
-5. Keep the launcher window open while using ISTUDIO. Closing it stops the local app server.
+3. The installer checks GitHub Releases for the newest ISTUDIO package.
+4. If a newer installer is available, it updates itself first, then continues automatically.
+5. ISTUDIO creates an `ISTUDIO` folder beside the BAT file.
+6. The installer sets up the complete app and starts ISTUDIO.
+7. Keep the launcher window open while using ISTUDIO. Closing it stops the local app server.
 
 Users do not need to install developer tools. The Windows release includes everything ISTUDIO needs to run.
 
@@ -89,6 +91,7 @@ To move work to another computer, copy the project folder into the new computer'
 ## Updates
 
 ISTUDIO updates are published through GitHub Releases.
+The installer checks for a newer release every time it runs, downloads the latest installer when needed, then installs or repairs ISTUDIO from the newest app package.
 The launcher checks for updates every time ISTUDIO starts. If the computer is offline or GitHub is unavailable, ISTUDIO keeps opening the installed version.
 
 Updates preserve:
