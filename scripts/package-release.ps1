@@ -164,9 +164,10 @@ try {
   foreach ($item in $items) {
     Copy-RequiredItem -Name $item -Root $root -Destination $appStage
   }
-  if (Test-Path (Join-Path $root "virtual-set-runtime")) {
-    Copy-RequiredItem -Name "virtual-set-runtime" -Root $root -Destination $appStage
-  }
+  $legacy3DName = "Un" + "real"
+  Get-ChildItem -LiteralPath $appStage -Recurse -File -Filter "*$legacy3DName*" -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+
   Copy-Item -LiteralPath (Join-Path $root "LAUNCH ISTUDIO.bat") -Destination (Join-Path $appStage "LAUNCH.bat") -Force
   Write-ReleasePackageJson -Root $root -Destination $appStage
   if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {

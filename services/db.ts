@@ -1,4 +1,4 @@
-import type { HistoryItem, ImageState, Project, TetherStatus, VirtualSetStatus } from '../types';
+import type { HistoryItem, ImageState, Project, TetherStatus } from '../types';
 
 const DB_NAME = 'StyleTransferDB';
 const DB_VERSION = 3; // Incremented version to add twins store
@@ -199,30 +199,6 @@ export async function startTetherSession(input: {
 export async function stopTetherSession(): Promise<TetherStatus> {
     return await apiRequest<TetherStatus>(`${TETHER_API}/stop`, {
         method: 'POST',
-    }, 30000);
-}
-
-export async function getVirtualSetStatus(): Promise<VirtualSetStatus> {
-    return await apiRequest<VirtualSetStatus>(`${VIRTUAL_SET_API}/status`, undefined, 10000);
-}
-
-export async function startVirtualSetRuntime(projectId: string | null): Promise<VirtualSetStatus> {
-    return await apiRequest<VirtualSetStatus>(`${VIRTUAL_SET_API}/start`, {
-        method: 'POST',
-        body: JSON.stringify({ projectId }),
-    }, 30000);
-}
-
-export async function stopVirtualSetRuntime(): Promise<VirtualSetStatus> {
-    return await apiRequest<VirtualSetStatus>(`${VIRTUAL_SET_API}/stop`, {
-        method: 'POST',
-    }, 30000);
-}
-
-export async function sendVirtualSetCommand(command: unknown): Promise<{ ok: boolean; status: VirtualSetStatus; message?: string; result?: unknown }> {
-    return await apiRequest<{ ok: boolean; status: VirtualSetStatus; message?: string; result?: unknown }>(`${VIRTUAL_SET_API}/command`, {
-        method: 'POST',
-        body: JSON.stringify(command),
     }, 30000);
 }
 

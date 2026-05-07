@@ -23,7 +23,6 @@ The self-contained `INSTALL-ISTUDIO.bat` embeds an internal app package containi
 - `dist-server/server.js`
 - `scripts/ISTUDIO-Launcher.ps1`
 - `LAUNCH.bat`
-- `virtual-set-runtime/` when the optional Unreal Virtual Set runtime is present during packaging
 
 The setup screen extracts and validates these files before starting ISTUDIO.
 

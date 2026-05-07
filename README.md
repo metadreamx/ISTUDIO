@@ -52,9 +52,7 @@ The app will ask for the key when it is needed. The key stays on the user's comp
 
 Virtual Set lets users compose a 3D scene inside ISTUDIO, adjust objects, camera, sky, lighting, fog, and render size, then save a still into the current project. A render can be sent directly into **Reference Edit** as the main reference DNA or as a controlled virtual background.
 
-ISTUDIO includes an in-app 3D preview and local project storage for Virtual Set scenes and renders. When the optional Unreal Virtual Set runtime is bundled in a release, ISTUDIO starts it locally and embeds the live Pixel Streaming viewport inside the same Virtual Set workspace.
-
-Developer/runtime integration details live in [`docs/UNREAL_VIRTUAL_SET_RUNTIME.md`](docs/UNREAL_VIRTUAL_SET_RUNTIME.md).
+ISTUDIO includes a native Three.js rendering engine with PBR materials, selectable objects and lights, transform gizmos, environment controls, imported image/model assets, fast WebGL preview, and progressive path-traced Beauty Render for bounced light, soft shadows, emissive panels, and realistic reflections. No external 3D engine or runtime is required.
 
 ### Tethered Mode
 

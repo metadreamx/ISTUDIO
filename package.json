@@ -15,18 +15,21 @@
   "dependencies": {
     "@google/genai": "^1.16.0",
     "@tailwindcss/vite": "^4.2.2",
-    "@types/three": "^0.184.0",
     "chokidar": "^4.0.3",
     "express": "^5.2.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.577.0",
     "motion": "^12.36.0",
+    "postprocessing": "^6.39.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-zoom-pan-pinch": "^3.6.0",
     "tailwindcss": "^4.2.2",
     "three": "^0.184.0",
-    "tsx": "^4.21.0"
+    "three-gpu-pathtracer": "^0.0.24",
+    "three-mesh-bvh": "^0.9.9",
+    "tsx": "^4.21.0",
+    "xatlas-web": "^0.1.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

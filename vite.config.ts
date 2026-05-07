@@ -21,13 +21,15 @@ export default defineConfig(({ mode }) => {
         }
       },
       build: {
-        chunkSizeWarningLimit: 700,
+        chunkSizeWarningLimit: 1000,
         rollupOptions: {
           output: {
             manualChunks(id) {
               if (id.includes('node_modules')) {
                 if (id.includes('react') || id.includes('scheduler')) return 'vendor-react';
-                if (id.includes('three')) return 'vendor-3d';
+                if (id.includes('three-gpu-pathtracer') || id.includes('three-mesh-bvh') || id.includes('xatlas-web')) return 'vendor-pathtracer';
+                if (id.includes('postprocessing')) return 'vendor-postprocessing';
+                if (id.includes('/three/') || id.includes('\\three\\')) return 'vendor-three';
                 if (id.includes('@google/genai')) return 'vendor-ai';
                 if (id.includes('motion') || id.includes('lucide-react')) return 'vendor-ui';
               }
