@@ -441,7 +441,9 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                         <GenerationPlaceholder />
                     ) : (
                       <img
-                          src={activeImage === 'generated' ? activeTarget.generated! : `data:${activeTarget.target.mimeType};base64,${activeTarget.target.base64}`}
+                          src={activeImage === 'generated'
+                            ? activeTarget.generated!
+                            : `data:${activeTarget.target.mimeType};base64,${activeTarget.target.base64}`}
                           alt={activeImage === 'target' ? "Target" : "Generated"}
                           className={`max-w-full max-h-full object-contain block rounded shadow-2xl transition-[opacity,filter,transform] duration-700 ${
                               activeImage === 'generated' && animateIn ? 'frosted-fade-in' : ''
@@ -538,13 +540,13 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                     <span>Add images</span>
                 </button>
                 <div className="flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1">
-                  <button 
+                  <button
                     onClick={() => { setViewMode('single'); setActiveImage('target'); }}
                     className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${viewMode === 'single' && activeImage === 'target' ? 'bg-[var(--color-accent)] text-black' : 'text-[var(--color-text-muted)] hover:text-white'}`}
                   >
                     Original
                   </button>
-                  <button 
+                  <button
                     onClick={() => { setViewMode('single'); setActiveImage('generated'); }}
                     disabled={!activeTarget.generated}
                     className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${viewMode === 'single' && activeImage === 'generated' ? 'bg-[var(--color-accent)] text-black' : 'text-[var(--color-text-muted)] hover:text-white disabled:opacity-30'}`}

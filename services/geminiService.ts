@@ -87,10 +87,50 @@ const fileToGenerativePart = (base64: string, mimeType: string) => {
 };
 
 const MAX_INLINE_REQUEST_BYTES = 18 * 1024 * 1024;
+const EDIT_IMAGE_MAX_LONG_EDGE = 4096;
+const EDIT_IMAGE_MAX_MEGAPIXELS = 18;
+const EDIT_IMAGE_MAX_INLINE_BYTES = 8.5 * 1024 * 1024;
+const EDIT_IMAGE_JPEG_QUALITY = 0.94;
+
+const passthroughMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 function estimateBase64Bytes(base64: string): number {
   const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
   return Math.floor((base64.length * 3) / 4) - padding;
+}
+
+function getMimeTypeFromDataUrl(dataUrl: string, fallback: string): string {
+  const match = dataUrl.match(/^data:([^;]+);base64,/);
+  const mimeType = (match?.[1] || fallback || 'image/jpeg').toLowerCase();
+  return mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+}
+
+function getHighFidelityEditSize(width: number, height: number): { width: number; height: number; resized: boolean } {
+  const longEdge = Math.max(width, height);
+  const megapixels = (width * height) / 1_000_000;
+  const edgeScale = longEdge > EDIT_IMAGE_MAX_LONG_EDGE ? EDIT_IMAGE_MAX_LONG_EDGE / longEdge : 1;
+  const megapixelScale = megapixels > EDIT_IMAGE_MAX_MEGAPIXELS ? Math.sqrt(EDIT_IMAGE_MAX_MEGAPIXELS / megapixels) : 1;
+  const scale = Math.min(1, edgeScale, megapixelScale);
+
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+    resized: scale < 0.999,
+  };
+}
+
+function encodeCanvasForGemini(canvas: HTMLCanvasElement, mimeType: string): string {
+  if (mimeType === 'image/png') {
+    return canvas.toDataURL(mimeType);
+  }
+
+  let quality = EDIT_IMAGE_JPEG_QUALITY;
+  let dataUrl = canvas.toDataURL(mimeType, quality);
+  while (estimateBase64Bytes(dataUrl.split(',')[1] || '') > EDIT_IMAGE_MAX_INLINE_BYTES && quality > 0.9) {
+    quality = Math.max(0.9, quality - 0.02);
+    dataUrl = canvas.toDataURL(mimeType, quality);
+  }
+  return dataUrl;
 }
 
 /**
@@ -112,40 +152,44 @@ export async function processAndResizeImage(file: File): Promise<ImageState> {
                 
                 const img = new Image();
                 img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    const MAX_WIDTH = 1536;
-                    const MAX_HEIGHT = 1536;
-                    let width = img.width;
-                    let height = img.height;
+                    const inputMimeType = getMimeTypeFromDataUrl(dataUrl, file.type);
+                    const originalBase64 = dataUrl.split(',')[1] || '';
+                    const originalBytes = estimateBase64Bytes(originalBase64);
+                    const highFidelitySize = getHighFidelityEditSize(img.width, img.height);
 
-                    if (width > height) {
-                        if (width > MAX_WIDTH) {
-                            height *= MAX_WIDTH / width;
-                            width = MAX_WIDTH;
-                        }
-                    } else {
-                        if (height > MAX_HEIGHT) {
-                            width *= MAX_HEIGHT / height;
-                            height = MAX_HEIGHT;
-                        }
+                    if (
+                        !highFidelitySize.resized &&
+                        passthroughMimeTypes.has(inputMimeType) &&
+                        originalBytes <= EDIT_IMAGE_MAX_INLINE_BYTES
+                    ) {
+                        resolve({
+                            fileName: file.name,
+                            base64: originalBase64,
+                            mimeType: inputMimeType,
+                            width: img.width,
+                            height: img.height,
+                        });
+                        return;
                     }
 
+                    const canvas = document.createElement('canvas');
+                    const { width, height } = highFidelitySize;
                     canvas.width = width;
                     canvas.height = height;
                     const ctx = canvas.getContext('2d');
                     if (!ctx) {
                         return reject(new Error("Failed to get canvas context."));
                     }
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = 'high';
                     ctx.drawImage(img, 0, 0, width, height);
                     
-                    const outputMimeType = file.type === 'image/png'
+                    const outputMimeType = inputMimeType === 'image/png'
                         ? 'image/png'
-                        : file.type === 'image/webp'
+                        : inputMimeType === 'image/webp'
                           ? 'image/webp'
                           : 'image/jpeg';
-                    const resizedDataUrl = outputMimeType === 'image/png'
-                        ? canvas.toDataURL(outputMimeType)
-                        : canvas.toDataURL(outputMimeType, 0.82);
+                    const resizedDataUrl = encodeCanvasForGemini(canvas, outputMimeType);
                     const base64 = resizedDataUrl.split(',')[1];
 
                     resolve({
@@ -315,16 +359,18 @@ export async function analyzeReferenceScene(base64Image: string): Promise<string
  */
 export async function analyzeTargetImageDetails(base64Image: string): Promise<string> {
   const base64Hash = await hashString(base64Image);
-  const cacheKey = `gemini_cache_analyzeTargetImageDetails_${base64Hash}`;
+  const cacheKey = `gemini_cache_analyzeTargetImageDetails_v2_${base64Hash}`;
   const cachedResult = getFromCache(cacheKey);
   if (cachedResult) return cachedResult;
 
   const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
-  const prompt = `Analyze the target image and provide a factual description of its core content for geometric locking.
+  const prompt = `Analyze the target image and provide a factual description of its core content for geometric locking and subject-lit outpainting.
   - **Pose:** Describe subject's pose, head tilt, chin height, shoulder alignment.
   - **Identity:** Describe facial landmarks (nose, jawline, eyes, teeth, skin tone).
   - **Expression:** Describe facial expression.
   - **Details:** Hair, clothing, accessories, setting.
+  - **Subject Lighting Blueprint:** Describe the lighting already visible on the subject: key-light direction, fill strength, rim light, shadow side, catchlights, color temperature, contrast ratio, and any color bleed on skin/clothing.
+  - **Scene Lighting Inference:** State what kind of environment would naturally create that lighting on this subject.
   Be concise and forensic.`;
   
   const ai = getAiClient();

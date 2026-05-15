@@ -1,7 +1,7 @@
 {
   "name": "istudio",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.12",
   "description": "Reference-based photo editing by Iconic Recordings.",
   "type": "module",
   "scripts": {

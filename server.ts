@@ -378,6 +378,15 @@ async function readImportedProjectFromFiles(projectDir: string): Promise<StoredP
   };
 }
 
+async function safeReadImportedProjectFromFiles(projectDir: string): Promise<StoredProject | null> {
+  try {
+    return await readImportedProjectFromFiles(projectDir);
+  } catch (error) {
+    console.warn(`Skipping imported project recovery for ${projectDir}`, error);
+    return null;
+  }
+}
+
 async function ensureProjectsDir() {
   await fs.mkdir(PROJECTS_DIR, { recursive: true });
 }
@@ -503,7 +512,7 @@ async function readProjectFromDirectory(projectDir: string): Promise<StoredProje
   const projectPath = path.join(projectDir, PROJECT_JSON);
   const project = await readRawProjectFile(projectPath);
   if (!project) {
-    const importedProject = await readImportedProjectFromFiles(projectDir);
+    const importedProject = await safeReadImportedProjectFromFiles(projectDir);
     return importedProject ? await hydrateValue(importedProject, projectDir) as StoredProject : null;
   }
 
@@ -511,18 +520,32 @@ async function readProjectFromDirectory(projectDir: string): Promise<StoredProje
     return await hydrateValue(project, projectDir) as StoredProject;
   } catch (error) {
     console.warn(`Recovering project with missing or invalid data: ${projectPath}`, error);
-    const importedProject = await readImportedProjectFromFiles(projectDir);
-    return importedProject ? await hydrateValue(importedProject, projectDir) as StoredProject : project;
+    const importedProject = await safeReadImportedProjectFromFiles(projectDir);
+    if (importedProject) {
+      try {
+        return await hydrateValue(importedProject, projectDir) as StoredProject;
+      } catch (importError) {
+        console.warn(`Imported recovery project could not be hydrated: ${projectDir}`, importError);
+      }
+    }
+    return project;
   }
 }
 
 async function readProjects(): Promise<StoredProject[]> {
   await migrateLegacyProjectFiles();
   const directories = await projectDirectories();
-  const projects = await Promise.all(directories.map(readProjectFromDirectory));
+  const projects = await Promise.all(directories.map(async (projectDir) => {
+    try {
+      return await readProjectFromDirectory(projectDir);
+    } catch (error) {
+      console.warn(`Skipping project that could not be loaded: ${projectDir}`, error);
+      return null;
+    }
+  }));
   return projects
     .filter((project): project is StoredProject => project !== null)
-    .sort((a, b) => b.lastModified - a.lastModified);
+    .sort((a, b) => (Number(b.lastModified) || 0) - (Number(a.lastModified) || 0));
 }
 
 function getArrayAtPath(value: unknown, keys: string[]): unknown[] {
@@ -536,7 +559,7 @@ function getArrayAtPath(value: unknown, keys: string[]): unknown[] {
 
 async function readProjectSummaryFromDirectory(projectDir: string): Promise<(StoredProject & { summary: { isSummary: true; outputCount: number; virtualSetSceneCount: number } }) | null> {
   const projectPath = path.join(projectDir, PROJECT_JSON);
-  const project = await readRawProjectFile(projectPath) || await readImportedProjectFromFiles(projectDir);
+  const project = await readRawProjectFile(projectPath) || await safeReadImportedProjectFromFiles(projectDir);
   if (!project) return null;
 
   const state = isRecord(project.state) ? project.state : {};
@@ -563,10 +586,17 @@ async function readProjectSummaryFromDirectory(projectDir: string): Promise<(Sto
 async function readProjectSummaries(): Promise<(StoredProject & { summary: { isSummary: true; outputCount: number; virtualSetSceneCount: number } })[]> {
   await migrateLegacyProjectFiles();
   const directories = await projectDirectories();
-  const summaries = await Promise.all(directories.map(readProjectSummaryFromDirectory));
+  const summaries = await Promise.all(directories.map(async (projectDir) => {
+    try {
+      return await readProjectSummaryFromDirectory(projectDir);
+    } catch (error) {
+      console.warn(`Skipping project summary that could not be loaded: ${projectDir}`, error);
+      return null;
+    }
+  }));
   return summaries
     .filter((project): project is StoredProject & { summary: { isSummary: true; outputCount: number; virtualSetSceneCount: number } } => project !== null)
-    .sort((a, b) => b.lastModified - a.lastModified);
+    .sort((a, b) => (Number(b.lastModified) || 0) - (Number(a.lastModified) || 0));
 }
 
 async function findProjectDir(id: string): Promise<string | null> {
@@ -1090,10 +1120,11 @@ async function startServer() {
 
   app.get('/api/projects', async (req, res) => {
     try {
-      res.json(req.query.summary === '1' ? await readProjectSummaries() : await readProjects());
+      const wantsFullProjects = req.query.full === '1' || req.query.includeImages === '1';
+      res.json(wantsFullProjects ? await readProjects() : await readProjectSummaries());
     } catch (error) {
       console.error('Failed to read projects folder', error);
-      res.status(500).json({ error: 'Failed to read projects folder.' });
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to read projects folder.' });
     }
   });
 

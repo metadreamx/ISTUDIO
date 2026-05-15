@@ -7,6 +7,7 @@ ISTUDIO is a Windows-first creative app for reference-based photo editing. Use o
 ## What ISTUDIO Does
 
 - **Reference Edit**: edit target photos from the lighting, background, mood, color, and style DNA of a reference image.
+- **High-detail output**: keeps the target photo's crop, aspect ratio, pose, and fine details as intact as possible while requesting the highest supported 4K Gemini output.
 - **Virtual Set**: build a 3D set, tune sky and lighting, render a still, then use it as reference DNA or a virtual background.
 - **Tethered Mode**: watch a camera capture folder and import new photos into a Reference Edit project automatically.
 - **Local projects**: save references, targets, generations, virtual sets, tethered captures, exports, and settings in project folders on your computer.

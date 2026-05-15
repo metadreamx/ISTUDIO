@@ -68,7 +68,20 @@ async function apiRequest<T>(url: string, init?: RequestInit, timeoutMs = 30000)
             },
         });
         if (!response.ok) {
-            throw new Error(`Request failed with status ${response.status}`);
+            let message = `Request failed with status ${response.status}`;
+            try {
+                const contentType = response.headers.get('content-type') || '';
+                if (contentType.includes('application/json')) {
+                    const body = await response.json() as { error?: string; message?: string };
+                    message = body.error || body.message || message;
+                } else {
+                    const bodyText = await response.text();
+                    message = bodyText || message;
+                }
+            } catch {
+                // Keep the status-only message if the server response cannot be parsed.
+            }
+            throw new Error(message);
         }
         const contentType = response.headers.get('content-type') || '';
         if (!contentType.includes('application/json')) {

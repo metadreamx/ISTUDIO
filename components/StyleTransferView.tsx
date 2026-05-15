@@ -102,6 +102,83 @@ const createInitialSkyItem = (): CustomSkyItem => ({
     status: 'empty'
 });
 
+const REFERENCE_ANALYSIS_TIMEOUT_MS = 75000;
+const COLOR_ANALYSIS_TIMEOUT_MS = 12000;
+
+const withReferenceAnalysisTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} took too long. ISTUDIO loaded starter DNA controls instead.`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
+const createFallbackReferenceChecklist = (): StyleCategory[] => ([
+  {
+    id: 'color_palette',
+    label: 'Colors',
+    intensity: 50,
+    items: [
+      { id: 'fallback-color-temperature', label: 'Color temperature', description: 'Match the overall warm, cool, or neutral color balance from the reference.', confidence: 'medium', checked: true },
+      { id: 'fallback-color-grade', label: 'Color grade', description: 'Carry over the reference image contrast, saturation, and tonal palette.', confidence: 'medium', checked: true },
+    ],
+  },
+  {
+    id: 'lighting',
+    label: 'Lighting',
+    intensity: 50,
+    items: [
+      { id: 'fallback-light-direction', label: 'Light direction', description: 'Match the key light direction and shadow side from the reference.', confidence: 'medium', checked: true },
+      { id: 'fallback-light-quality', label: 'Light quality', description: 'Match the softness, contrast ratio, highlights, and falloff from the reference.', confidence: 'medium', checked: true },
+    ],
+  },
+  {
+    id: 'mood_atmosphere',
+    label: 'Mood',
+    intensity: 50,
+    items: [
+      { id: 'fallback-atmosphere', label: 'Atmosphere', description: 'Transfer the scene mood, air, haze, polish, and editorial feeling.', confidence: 'medium', checked: true },
+    ],
+  },
+  {
+    id: 'spatial_dna',
+    label: 'Spatial DNA',
+    intensity: 50,
+    items: [
+      { id: 'fallback-depth-layout', label: 'Depth and layout', description: 'Use the reference depth, background spacing, perspective, and environmental structure.', confidence: 'medium', checked: true },
+    ],
+  },
+  {
+    id: 'background_elements',
+    label: 'Background',
+    intensity: 50,
+    items: [
+      { id: 'fallback-background-environment', label: 'Environment', description: 'Replace or restyle the background using the reference environment and scene language.', confidence: 'medium', checked: true },
+    ],
+  },
+  {
+    id: 'post_processing',
+    label: 'Effects',
+    intensity: 50,
+    items: [
+      { id: 'fallback-finish', label: 'Final finish', description: 'Match the reference image finishing, contrast, glow, grain, and lens polish.', confidence: 'medium', checked: true },
+    ],
+  },
+]);
+
+const createFallbackReferenceBlueprint = (): string => [
+  'Starter Visual DNA Blueprint:',
+  '- Analyze the reference image directly while generating and transfer its visible background, lighting direction, color temperature, mood, depth, and finish.',
+  '- Keep the target subject geometry stable while replacing or restyling the surrounding scene according to the selected DNA controls.',
+  '- Use the target subject lighting as a physical guide so the generated environment feels naturally connected to the subject.',
+].join('\n');
+
 const compactHistoryImage = (image: ImageState | undefined, fallbackFileName: string | null = null): ImageState => ({
   fileName: image?.fileName || fallbackFileName,
   base64: null,
@@ -144,6 +221,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   const [isTetherPanelOpen, setIsTetherPanelOpen] = useState(false);
   const [isTetherBusy, setIsTetherBusy] = useState(false);
   const importedTetherCaptureIdsRef = useRef<Set<string>>(new Set());
+  const isRefreshingTetherStatusRef = useRef(false);
 
   // State for custom clothing feature
   const [customClothingItems, setCustomClothingItems] = useState({
@@ -489,6 +567,8 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   ]);
 
   const refreshTetherStatus = useCallback(async () => {
+    if (isRefreshingTetherStatusRef.current) return;
+    isRefreshingTetherStatusRef.current = true;
     try {
       const knownCaptureIds = Array.from(importedTetherCaptureIdsRef.current)
         .filter((id): id is string => typeof id === 'string')
@@ -498,13 +578,17 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         knownCaptureIds,
       }));
     } catch (error) {
-      console.warn('Could not refresh Tethered Mode status.', error);
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        console.warn('Could not refresh Tethered Mode status.', error);
+      }
+    } finally {
+      isRefreshingTetherStatusRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     refreshTetherStatus();
-    const timer = window.setInterval(refreshTetherStatus, 1500);
+    const timer = window.setInterval(refreshTetherStatus, 3000);
     return () => window.clearInterval(timer);
   }, [refreshTetherStatus]);
 
@@ -672,6 +756,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       if (tetherAutoEdit && !canAutoQueueTether) {
         setError('Tethered photos are importing. Add a reference image and select at least one DNA control to begin auto editing.');
       }
+
     };
 
     ingest();
@@ -701,7 +786,6 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, [canAutoQueueTether, saveProjectNow, tetherAutoEdit]);
 
   useEffect(() => {
-    const controller = new AbortController();
     let isCancelled = false;
 
     const processReferenceImage = async () => {
@@ -719,15 +803,21 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         setOpenCategoryId(null);
         
         try {
-          const results = await Promise.all([
-            detectTransferableElements(base64),
-            getDominantColor(base64, mimeType),
-            analyzeReferenceScene(base64)
+          const [itemsResult, colorResult, blueprintResult] = await Promise.allSettled([
+            withReferenceAnalysisTimeout(detectTransferableElements(base64), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Visual DNA analysis'),
+            withReferenceAnalysisTimeout(getDominantColor(base64, mimeType), COLOR_ANALYSIS_TIMEOUT_MS, 'Color analysis'),
+            withReferenceAnalysisTimeout(analyzeReferenceScene(base64), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Scene blueprint analysis')
           ]);
           
           if (isCancelled) return;
           
-          const [items, color, blueprint] = results;
+          const items = itemsResult.status === 'fulfilled' && itemsResult.value.length > 0
+            ? itemsResult.value
+            : createFallbackReferenceChecklist();
+          const color = colorResult.status === 'fulfilled' ? colorResult.value : null;
+          const blueprint = blueprintResult.status === 'fulfilled' && blueprintResult.value.trim()
+            ? blueprintResult.value
+            : createFallbackReferenceBlueprint();
 
           const itemsWithIntensity = items.map(category => ({
             ...category,
@@ -741,10 +831,22 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
           if (itemsWithIntensity.length > 0) {
             setOpenCategoryId(itemsWithIntensity[0].id);
           }
+          const failures = [itemsResult, colorResult, blueprintResult]
+            .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+            .map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason));
+          if (failures.length > 0) {
+            console.warn('Reference image analysis completed with fallback data:', failures);
+            setError('Visual DNA analysis took too long, so ISTUDIO loaded reliable starter DNA controls. You can generate now or re-upload the reference to retry the full analysis.');
+          }
         } catch (e) {
           if (isCancelled) return;
           console.error("Reference image analysis failed:", e);
-          setError(e instanceof Error ? e.message : "Failed to process reference image.");
+          const fallbackItems = createFallbackReferenceChecklist();
+          setChecklist(fallbackItems);
+          setSceneBlueprint(createFallbackReferenceBlueprint());
+          setOpenCategoryId(fallbackItems[0]?.id || null);
+          lastAnalyzedRefBase64.current = base64;
+          setError(e instanceof Error ? e.message : "Failed to process reference image. ISTUDIO loaded starter DNA controls instead.");
           setAccentColor(null);
           setSessionSeed(null);
         } finally {
@@ -754,15 +856,17 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         }
       } else {
         setChecklist([]);
+        setSceneBlueprint(null);
         setAccentColor(null);
         setSessionSeed(null);
+        setOpenCategoryId(null);
+        setIsAnalyzing(false);
       }
     };
     processReferenceImage();
 
     return () => {
       isCancelled = true;
-      controller.abort();
     };
   }, [referenceImage.base64, referenceImage.mimeType]);
 
@@ -1231,15 +1335,18 @@ This is a specific directive to replace the SKY in the Target Image with the cus
 
         const anchorScene = anchorImageId ? targetImages.find(img => img.id === anchorImageId) : null;
         const isStatefulIteration = !!(anchorScene && anchorScene.generated);
+        const targetWorkingResolution = imageToProcess.target.width && imageToProcess.target.height
+          ? `${imageToProcess.target.width}x${imageToProcess.target.height}`
+          : 'the supplied target image resolution';
 
         const anchorSceneInstruction = isStatefulIteration ? `
 ---
 **STATEFUL ITERATION MODE (CRITICAL)**
 You have been provided with an additional image: the **ANCHOR SCENE** (Image 2).
 This is a "Persistent Scene Diffusion Engine". 
-- **BACKGROUND SOURCE:** You MUST extract the EXACT background, lighting, depth, and layout from the Anchor Scene (Image 2).
+- **BACKGROUND SOURCE:** You MUST extract the EXACT background, lighting, depth, and layout from the Anchor Scene.
 - **SUBJECT SOURCE (CRITICAL):** You MUST extract the subject from the Target Image (Image 1). 
-- **SUBJECT REPLACEMENT:** You are STRICTLY FORBIDDEN from copying the subject, pose, or identity from the Anchor Scene (Image 2). The subject in Image 2 is a placeholder. You must completely replace them with the subject from Image 1.
+- **SUBJECT REPLACEMENT:** You are STRICTLY FORBIDDEN from copying the subject, pose, or identity from the Anchor Scene. The subject in the Anchor Scene is a placeholder. You must completely replace them with the subject from Image 1.
 - **COMPOSITING:** Composite the subject from Image 1 seamlessly into the EXACT background of Image 2. The subject MUST look like they were physically present in that exact room/environment when the photo was taken. Pay extreme attention to matching the lighting, shadows, and scale of Image 2.
 Apply the style from the Reference Image with a decay factor (alpha) to prevent over-stylization, focusing primarily on blending the subject realistically into the established scene.
 ---
@@ -1259,16 +1366,21 @@ ${isStatefulIteration ? '- IMAGE 2: The Anchor Scene (The exact background and l
    - 26-50%: Balanced blend.
    - 51-75%: Strong stylistic dominance.
    - 76-100%: Total stylistic takeover.
+4. **CAMERA-GRADE DETAIL PRESERVATION:** Treat Image 1 as a high-resolution Canon R5 C still. Preserve micro-detail: hair strands, eyelashes, eyes, teeth, fingernails, jewelry, skin texture, fabric weave, stitching, labels, and natural camera sharpness. Do not create waxy skin, smudged fabric, low-detail hands, blurred accessories, or AI-smooth plastic texture.
+5. **RESOLUTION & FRAME FIDELITY:** The target working resolution is ${targetWorkingResolution}. Preserve the exact crop, framing, aspect ratio, and subject scale. Return the highest supported 4K-quality image with crisp fine details and no artificial softening.
 
 **ROLE & GOAL**
 You are an Elite Photorealistic Compositing and Style Transfer Engine. Your absolute top priority is UNCOMPROMISING REALISM while PRESERVING THE PHOTOGRAPHER'S ORIGINAL POSE. Every generation must look like a genuine, unedited photograph. The subject must be seamlessly integrated into the environment without moving a single limb or changing their head tilt.
 
 ${anchorSceneInstruction}
 
-1.  **ULTIMATE REALISM & COMPOSITING (TOP PRIORITY):**
+1.  **SUBJECT-LIT OUTPAINTING & ULTIMATE REALISM (TOP PRIORITY):**
+    - **SUBJECT LIGHTING IS THE SOURCE OF TRUTH:** The target subject already contains the correct key light, fill, shadow side, rim light, skin/clothing color temperature, and catchlights. Infer the environment that would naturally create this lighting, then generate that environment around the subject.
+    - **REFERENCE DNA SCENE BUILD:** Replace or restyle the environment using the Reference DNA, custom background, custom sky, and selected controls while keeping the target subject's identity, anatomy, pose, and framing stable.
+    - **NO CUT-OUT LOOK:** The generated image must blend the subject and environment in-camera with realistic light wrap, edge atmosphere, color bleed, shadows, and occlusion.
     - **GROUNDING & PLACEMENT:** The subject must be perfectly grounded in the scene. No floating subjects. You MUST generate appropriate contact shadows that match the scene's lighting direction and quality.
-    - **SCALE & PERSPECTIVE:** The subject's scale and perspective must be realistically adjusted to fit the environment. Match the camera angle and focal length implied by the background.
-    - **LIGHTING MATCH:** The lighting on the subject MUST perfectly match the environmental lighting of the scene. Replicate the light direction, quality (soft/hard), color temperature, and ambient bounce light.
+    - **SCALE & PERSPECTIVE:** Preserve the subject's original scale, position, and framing from Image 1. Match the generated environment to the subject's camera angle and focal length; never scale the subject to fit the environment.
+    - **LIGHTING MATCH:** The environmental lighting MUST perfectly match the lighting already visible on the subject. Replicate the subject's light direction, quality (soft/hard), color temperature, shadow side, and ambient bounce light in the generated scene.
     - **REFLECTIONS & SPECULARITY:** Generate realistic reflections of the environment on all appropriate surfaces: eyes, skin (subtle specularity), water, glass, metallic objects, and polished floors. Reflections must be geometrically accurate based on the scene's layout.
     - **ENVIRONMENTAL "STUFF" & ATMOSPHERE:** Include subtle environmental details that enhance photorealism: micro-dust particles in light beams, realistic atmospheric haze, subtle lens flares (if looking towards light), and realistic texture interactions (e.g., wetness, dirt, or fabric grain).
     - **SEAMLESS BLENDING:** Edges must blend naturally without halos or cut-out artifacts. Match the depth of field and film grain/noise of the environment perfectly.
@@ -1283,9 +1395,9 @@ ${anchorSceneInstruction}
 
 4.  **SPATIAL & POSE INTEGRITY (HIGHEST PRIORITY):**
     - **FROZEN SKELETON:** The subject's pose MUST be identical to Image 1. You are FORBIDDEN from making even "subtle" adjustments to the pose. The head tilt, arm positions, and finger placements must be pixel-perfect matches to the original.
-    - **PIXEL-PERFECT POSITION:** The subject's core position should be consistent with Image 1, but adjusted for realistic grounding and perspective within the new environment.
+    - **PIXEL-PERFECT POSITION:** The subject's position, size, silhouette, and framing must remain consistent with Image 1. Adjust the new floor/background/shadows to ground the subject, not the subject itself.
     - **NO RESIZING/RATIO CHANGE:** You are FORBIDDEN from changing the overall image aspect ratio.
-    ${!aspectRatio ? '- **NO OUTPAINTING**: Do NOT generate outside the original image boundaries.' : ''}
+    ${!aspectRatio ? '- **NO FRAME EXPANSION**: Do NOT generate outside the original image boundaries. Regenerate the in-frame environment around the target subject without expanding the frame.' : ''}
 
 5.  **IDENTITY LOCK (SUPREME AUTHORITY):**
     - The face, hair, and clothing in the output MUST be the EXACT same as in the Target Image (Image 1). Preserve all unique biometric features, moles, scars, and textures.${isStatefulIteration ? ' DO NOT use the subject from the Anchor Scene (Image 2).' : ''}
@@ -1314,6 +1426,7 @@ Before outputting, verify:
 3. Did the teeth or eyes change from Image 1? If yes, FAIL.
 4. Does the atmosphere and lighting perfectly match the Reference DNA? If no, FAIL.
 5. Is the scene environment completely consistent with the Reference Blueprint? If no, FAIL.
+6. Are fine details sharp and camera-quality at the highest supported output size? If no, FAIL.
 `;
         if (cancelGenerationRef.current) throw new Error("Cancelled");
         
@@ -1353,7 +1466,9 @@ Before outputting, verify:
         if (cancelGenerationRef.current) throw new Error("Cancelled");
 
         const newImageSrc = `data:image/png;base64,${newImageBase64}`;
+
         const generationId = Date.now();
+        const settingsSnapshot = getGenerationSettingsSnapshot();
         const historyItem: HistoryItem = {
           id: generationId,
           projectId: project?.id || 'live-session',
@@ -1370,11 +1485,15 @@ Before outputting, verify:
           },
           targetId: imageToProcess.id,
           targetFileName: imageToProcess.target.fileName,
-          settings: getGenerationSettingsSnapshot(),
+          settings: settingsSnapshot,
         };
 
         // Update state to show image
-        setTargetImages(prev => prev.map((img, idx) => idx === imageIndex ? { ...img, status: 'done', generated: newImageSrc } : img));
+        setTargetImages(prev => prev.map((img, idx) => idx === imageIndex ? {
+          ...img,
+          status: 'done',
+          generated: newImageSrc,
+        } : img));
         setGenerationHistory(prev => [historyItem, ...prev].slice(0, 200));
 
         setGenerationStatus('saving');
@@ -1406,6 +1525,7 @@ Before outputting, verify:
     getGenerationSettingsSnapshot,
     project?.id,
     referenceImage,
+    saveProjectNow,
     sceneBlueprint,
     sessionSeed,
     targetImages,
@@ -2058,12 +2178,14 @@ Before outputting, verify:
                                 : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)]'
                             }`}
                           >
-                            <img
-                              src={item.generated}
-                              alt="Saved generation"
-                              className="h-16 w-16 rounded-lg object-cover"
-                              loading="lazy"
-                            />
+                            <span className="relative h-16 w-16 overflow-hidden rounded-lg bg-black/30">
+                              <img
+                                src={item.generated}
+                                alt="Saved generation"
+                                className="h-full w-full object-cover"
+                                loading="lazy"
+                              />
+                            </span>
                             <span className="min-w-0 self-center">
                               <span className="block truncate text-xs font-semibold text-[var(--color-text)]">
                                 {item.targetFileName || item.target?.fileName || 'Saved generation'}
