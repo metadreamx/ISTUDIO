@@ -100,60 +100,81 @@ const ImageStrip: React.FC<{
         }
     }, [activeIndex]);
 
-    if (images.length <= 1) return null;
+    if (images.length === 0) return null;
+
+    const renderThumb = (image: BatchImage, index: number, size: 'compact' | 'desktop') => {
+        const isActive = index === activeIndex;
+        const isSelected = selectedIds.has(image.id);
+        const targetSrc = getImageSrc(image.target);
+        const generatedSrc = image.generated;
+        const isCompact = size === 'compact';
+
+        return (
+            <div key={`${size}-${image.id}`} ref={isActive ? activeRef : null} className="relative flex-shrink-0 group">
+                <button
+                    onClick={() => onSelect(index)}
+                    className={`${isCompact ? 'h-20 w-16 rounded-xl' : 'h-14 w-14 rounded-lg'} overflow-hidden border bg-black/35 transition-all duration-300 ${
+                        isActive
+                            ? 'border-[var(--color-accent)] opacity-100 shadow-[0_0_0_3px_rgba(var(--color-accent-rgb),0.12)]'
+                            : 'border-[var(--color-border)] opacity-65 hover:border-[var(--color-border-hover)] hover:opacity-100'
+                    }`}
+                    aria-label={`Select image ${index + 1}`}
+                    aria-current={isActive}
+                >
+                    {targetSrc && <img src={targetSrc} className="h-full w-full object-cover" alt={`Target image ${index + 1}`} />}
+                </button>
+
+                <button
+                    onClick={(e) => { e.stopPropagation(); onToggleSelection(image.id); }}
+                    className={`absolute left-1 top-1 z-30 flex ${isCompact ? 'h-5 w-5 rounded-md' : 'h-4 w-4 rounded-sm'} items-center justify-center border transition-all ${
+                        isSelected
+                            ? 'bg-[var(--color-accent)] border-[var(--color-accent)] text-black opacity-100'
+                            : 'bg-black/70 border-white/20 text-transparent hover:border-[var(--color-accent)] opacity-0 group-hover:opacity-100'
+                    }`}
+                    aria-label={`Select image ${index + 1} for batching`}
+                >
+                    <CheckIcon className={isCompact ? 'h-3 w-3' : 'h-2.5 w-2.5'} />
+                </button>
+
+                {(image.status !== 'pending' && image.status !== 'done' || generatedSrc) && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[inherit] bg-black/35">
+                        {image.status === 'queued' && <HistoryIcon className="h-4 w-4 text-white/60" />}
+                        {image.status === 'processing' && <SpinnerIcon className="h-4 w-4 animate-spin text-[var(--color-accent)]" />}
+                        {image.status === 'done' && generatedSrc && (
+                            <img src={generatedSrc} className="h-full w-full rounded-[inherit] border border-[var(--color-accent)]/30 object-cover" alt={`Generated image ${index + 1}`} />
+                        )}
+                        {image.status === 'error' && <XCircleIcon className="h-5 w-5 text-red-500" />}
+                    </div>
+                )}
+                {image.status === 'done' && <CheckCircleIcon className={`absolute right-0 top-0 z-20 ${isCompact ? 'h-4 w-4' : 'h-3 w-3'} rounded-full bg-black text-[var(--color-accent)]`} />}
+
+                <button
+                    onClick={(e) => { e.stopPropagation(); onRemove(image.id); }}
+                    className="absolute bottom-1 right-1 z-30 rounded-md border border-red-500/30 bg-red-950/80 p-0.5 text-red-400 opacity-0 transition-all hover:bg-red-500 hover:text-white group-hover:opacity-100"
+                    aria-label={`Remove image ${index + 1}`}
+                >
+                    <CloseIcon className={isCompact ? 'h-3 w-3' : 'h-2.5 w-2.5'} />
+                </button>
+            </div>
+        );
+    };
 
     return (
-        <div className="absolute bottom-[60px] left-0 right-0 z-40 w-full border-t border-[var(--color-border)] bg-[var(--color-header)]/95 backdrop-blur-xl">
-        <div className="flex gap-3 overflow-x-auto px-6 py-3 shadow-2xl custom-scrollbar">
-                {images.map((image, index) => {
-                    const isActive = index === activeIndex;
-                    const isSelected = selectedIds.has(image.id);
-                    const targetSrc = getImageSrc(image.target);
-                    return (
-                        <div key={image.id} ref={isActive ? activeRef : null} className="relative flex-shrink-0 group">
-                            <button
-                                onClick={() => onSelect(index)}
-                                className={`h-14 w-14 overflow-hidden rounded-lg border transition-all duration-300 ${isActive ? 'border-[var(--color-accent)] opacity-100 shadow-[0_0_0_3px_rgba(var(--color-accent-rgb),0.12)]' : 'border-[var(--color-border)] opacity-55 hover:border-[var(--color-border-hover)] hover:opacity-100'}`}
-                                aria-label={`Select image ${index + 1}`}
-                                aria-current={isActive}
-                            >
-                                {targetSrc && <img src={targetSrc} className="w-full h-full object-cover" alt={`Target image ${index + 1}`} />}
-                            </button>
-                            
-                            {/* Selection Checkbox */}
-                            <button
-                                onClick={(e) => { e.stopPropagation(); onToggleSelection(image.id); }}
-                                className={`absolute top-1 left-1 w-4 h-4 rounded-sm flex items-center justify-center border transition-all z-30 ${
-                                    isSelected 
-                                    ? 'bg-[var(--color-accent)] border-[var(--color-accent)] text-black opacity-100' 
-                                    : 'bg-black/70 border-white/20 text-transparent hover:border-[var(--color-accent)] opacity-0 group-hover:opacity-100'
-                                }`}
-                                aria-label={`Select image ${index + 1} for batching`}
-                            >
-                                <CheckIcon className="w-2.5 h-2.5" />
-                            </button>
+        <>
+            {images.length > 1 && (
+                <div className="absolute bottom-[60px] left-0 right-0 z-40 hidden w-full border-t border-[var(--color-border)] bg-[var(--color-header)]/95 backdrop-blur-xl lg:block">
+                    <div className="flex gap-3 overflow-x-auto px-6 py-3 shadow-2xl custom-scrollbar">
+                        {images.map((image, index) => renderThumb(image, index, 'desktop'))}
+                    </div>
+                </div>
+            )}
 
-                            {(image.status !== 'pending' && image.status !== 'done' || image.generated) && (
-                                <div className="absolute inset-0 bg-black/40 flex items-center justify-center pointer-events-none rounded-md">
-                                    {image.status === 'queued' && <HistoryIcon className="w-4 h-4 text-white/50" />}
-                                    {image.status === 'processing' && <SpinnerIcon className="w-4 h-4 animate-spin text-[var(--color-accent)]" />}
-                                    {image.status === 'done' && image.generated && (
-                                        <img src={image.generated} className="w-full h-full object-cover rounded-md border border-[var(--color-accent)]/30" alt={`Generated image ${index + 1}`}/>
-                                    )}
-                                    {image.status === 'error' && <XCircleIcon className="w-5 h-5 text-red-500" />}
-                                </div>
-                            )}
-                             {image.status === 'done' && <CheckCircleIcon className="absolute top-0 right-0 w-3 h-3 text-[var(--color-accent)] bg-black rounded-full z-20" />}
-                            
-                            {/* Remove Button */}
-                            <button onClick={(e) => { e.stopPropagation(); onRemove(image.id); }} className="absolute bottom-1 right-1 z-30 rounded-md border border-red-500/30 bg-red-950/80 p-0.5 text-red-400 opacity-0 transition-all hover:bg-red-500 hover:text-white group-hover:opacity-100" aria-label={`Remove image ${index + 1}`}>
-                                <CloseIcon className="w-2.5 h-2.5" />
-                            </button>
-                        </div>
-                    );
-                })}
+            <div className="mobile-image-tray shrink-0 border-t border-[var(--color-border)] bg-black/92 px-3 py-3 backdrop-blur-xl lg:hidden">
+                <div className="flex items-center gap-3 overflow-x-auto no-scrollbar">
+                    {images.map((image, index) => renderThumb(image, index, 'compact'))}
+                </div>
             </div>
-        </div>
+        </>
     );
 };
 
@@ -423,7 +444,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
           multiple
         />
         <div className="relative min-h-0 w-full flex-1 bg-[var(--color-viewport)]">
-          <div className="lg:hidden absolute top-4 left-4 z-20 w-28 h-28">
+          <div className="hidden absolute top-4 left-4 z-20 w-28 h-28 lg:block">
               <ImageUploader
                   id="reference-image-mobile"
                   title="Reference"
@@ -471,17 +492,17 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                 </TransformWrapper>
               </div>
 
-              <div className={`h-full w-full overflow-x-auto bg-[var(--color-viewport)] ${viewMode === 'side-by-side' ? 'block' : 'hidden'}`}>
-                <div className="grid h-full min-w-[720px] grid-cols-2 gap-3 p-3 sm:min-w-[820px] sm:gap-4 sm:p-5 lg:min-w-0 lg:p-8">
-                <div className="group relative min-h-0 overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl">
+              <div className={`h-full w-full bg-[var(--color-viewport)] md:overflow-x-auto ${viewMode === 'side-by-side' ? 'block' : 'hidden'}`}>
+                <div className="grid h-full min-w-0 grid-cols-2 gap-1.5 p-2 md:min-w-[720px] md:gap-3 md:p-3 lg:min-w-0 lg:gap-4 lg:p-8">
+                <div className="group relative min-h-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl sm:rounded-2xl">
                   <TransformWrapper ref={originalSideRef} initialScale={1} centerOnInit={true} onTransformed={handleOriginalTransform}>
                     <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
                       {activeTargetSrc && <img src={activeTargetSrc} alt="Original" className="max-w-full max-h-full object-contain block" />}
                     </TransformComponent>
                   </TransformWrapper>
-                  <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-white/10 bg-black/70 px-2.5 py-1 text-xs font-semibold text-white/75">Target Photo</div>
+                  <div className="pointer-events-none absolute left-2 top-2 rounded-md border border-white/10 bg-black/70 px-2 py-1 text-[10px] font-semibold text-white/75 sm:left-4 sm:top-4 sm:px-2.5 sm:text-xs">Target</div>
                 </div>
-                <div className="group relative min-h-0 overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl">
+                <div className="group relative min-h-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl sm:rounded-2xl">
                   <TransformWrapper ref={styledSideRef} initialScale={1} centerOnInit={true} onTransformed={handleStyledTransform}>
                     <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
                       {activeTarget.generated ? (
@@ -497,8 +518,8 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                       )}
                     </TransformComponent>
                   </TransformWrapper>
-                  <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-white/10 bg-[var(--color-accent)] px-2.5 py-1 text-xs font-semibold text-black shadow-[0_0_15px_rgba(var(--color-accent-rgb),0.24)]">
-                    Reference Edit
+                  <div className="pointer-events-none absolute left-2 top-2 rounded-md border border-white/10 bg-[var(--color-accent)] px-2 py-1 text-[10px] font-semibold text-black shadow-[0_0_15px_rgba(var(--color-accent-rgb),0.24)] sm:left-4 sm:top-4 sm:px-2.5 sm:text-xs">
+                    Result
                   </div>
                 </div>
                 </div>
@@ -547,15 +568,15 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
         />
 
         {activeTarget && (
-          <div className="relative z-40 flex min-h-[60px] flex-col items-center justify-between gap-3 border-t border-[var(--color-border)] bg-[var(--color-header)] p-3 text-[var(--color-text-muted)] sm:px-5 md:flex-row">
-            <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto no-scrollbar py-1">
+          <div className="mobile-editor-dock no-scrollbar relative z-40 flex min-h-[58px] shrink-0 items-center justify-between gap-2 overflow-x-auto border-t border-[var(--color-border)] bg-[var(--color-header)] px-2 py-2 text-[var(--color-text-muted)] backdrop-blur-xl sm:px-5 md:min-h-[60px]">
+            <div className="flex shrink-0 items-center gap-2 overflow-x-auto no-scrollbar py-1">
                 <button
                     onClick={() => inputRef.current?.click()}
-                    className="btn-secondary flex items-center gap-2 px-3 py-2 text-xs"
+                    className="btn-secondary flex h-10 items-center gap-2 px-3 py-2 text-xs"
                     aria-label="Upload target images"
                 >
                     <PlusIcon className="w-3.5 h-3.5" />
-                    <span>Add images</span>
+                    <span>Add</span>
                 </button>
                 <div className="flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1">
                   <button
@@ -574,7 +595,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                 </div>
             </div>
 
-            <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end py-1">
+            <div className="hidden shrink-0 items-center gap-2 py-1 md:flex">
               <span className="hidden text-xs font-medium text-[var(--color-text-muted)] sm:inline">Zoom {Math.round(zoomLevel * 100)}%</span>
               <div className="flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1">
                   <button onClick={handleZoomOut} className="rounded-md p-2 transition-colors hover:bg-[var(--color-surface-hover)] hover:text-white" aria-label="Zoom out"><ZoomOutIcon className="w-3.5 h-3.5" /></button>
@@ -586,9 +607,9 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
               </div>
             </div>
 
-            <div className="flex items-center gap-2 w-full md:w-auto pt-2 md:pt-0 border-t md:border-t-0 border-white/5">
+            <div className="flex shrink-0 items-center gap-2 py-1">
               <Tooltip text="Reset view">
-                  <button onClick={handleResetTransform} className="btn-secondary flex h-9 w-9 items-center justify-center p-0" aria-label="Reset view">
+                  <button onClick={handleResetTransform} className="btn-secondary hidden h-9 w-9 items-center justify-center p-0 md:flex" aria-label="Reset view">
                     <ResetIcon className="w-3.5 h-3.5" />
                   </button>
               </Tooltip>

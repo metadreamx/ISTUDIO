@@ -10,9 +10,10 @@
       "purpose": "any maskable"
     }
   ],
-  "start_url": ".",
+  "start_url": "./?storage=browser",
   "scope": ".",
-  "display": "standalone",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
   "orientation": "any",
   "theme_color": "#090A0C",
   "background_color": "#090A0C",

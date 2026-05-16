@@ -1,4 +1,4 @@
-const CACHE_NAME = 'istudio-pwa-shell-v2';
+const CACHE_NAME = 'istudio-pwa-shell-v3';
 
 const shellUrls = [
   './',

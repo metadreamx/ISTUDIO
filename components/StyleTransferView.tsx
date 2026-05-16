@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircleIcon, CameraIcon, FolderOpenIcon, PlayIcon, RadioIcon, RefreshCwIcon, SquareIcon as StopIcon } from 'lucide-react';
+import { AlertCircleIcon, CameraIcon, FolderOpenIcon, PlayIcon, RadioIcon, RefreshCwIcon, SettingsIcon, SquareIcon as StopIcon } from 'lucide-react';
 import type { ImageState, StyleCategory, HistoryItem, BatchImage, CustomClothingItem, CustomAccessoryItem, CustomFaceItem, CustomBackgroundItem, CustomSkyItem, AspectRatio, Project, ProjectStorageMode, TetherCapture, TetherProjectState, TetherStatus } from '../types';
 import { ImageUploader } from './ImageUploader';
 import { MainPanel } from './MainPanel';
@@ -9,7 +9,7 @@ import { StyleChecklist } from './StyleChecklist';
 import { analyzeTargetImageDetails, editImage, detectTransferableElements, analyzeClothingImage, analyzeAccessoryImage, analyzeFaceImage, analyzeBackgroundImage, analyzeSkyImage, analyzeReferenceScene } from '../services/geminiService';
 import { getTetherStatus, saveProjectAsset, selectTetherFolder, startTetherSession, stopTetherSession } from '../services/db';
 import { getImageSrc, hasImageSource, imageToGeminiInput } from '../services/imageAssets';
-import { SparklesIcon, XCircleIcon, CheckIcon, LockIcon, AdjustmentsHorizontalIcon, HistoryIcon, DownloadIcon, ChevronDownIcon } from '@/components/icons';
+import { SparklesIcon, XCircleIcon, CheckIcon, LockIcon, HistoryIcon, DownloadIcon, ChevronDownIcon } from '@/components/icons';
 
 // Utility function to get dominant color from an image
 const getDominantColor = (base64Image: string, mimeType: string): Promise<string> => {
@@ -1828,14 +1828,14 @@ Before outputting, verify:
     <motion.div 
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="relative flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg)] lg:flex-row"
+      className="mobile-reference-workspace relative flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg)] lg:flex-row"
       style={{'--dynamic-accent-color': accentColor || 'var(--color-accent)'} as React.CSSProperties}
     >
       {/* Mobile Toggle Button */}
       <button 
         onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-        className="fixed bottom-[84px] right-4 z-[100] flex h-14 w-14 items-center justify-center rounded-full border-4 border-black bg-[var(--color-accent)] text-black shadow-2xl transition-transform active:scale-95 lg:hidden"
-        aria-label="Toggle style controls"
+        className="mobile-settings-fab fixed right-3 top-[calc(env(safe-area-inset-top)+72px)] z-[100] flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-[var(--color-accent)] text-black shadow-2xl shadow-black/40 transition-transform active:scale-95 lg:hidden"
+        aria-label="Open edit settings"
       >
         <div className="relative">
           <AnimatePresence mode="wait">
@@ -1855,7 +1855,7 @@ Before outputting, verify:
                 animate={{ opacity: 1, rotate: 0 }}
                 exit={{ opacity: 0, rotate: -90 }}
               >
-                <AdjustmentsHorizontalIcon className="w-6 h-6" />
+                <SettingsIcon className="w-5 h-5" />
               </motion.div>
             )}
           </AnimatePresence>
@@ -1886,8 +1886,8 @@ Before outputting, verify:
       </main>
 
       {/* --- Sidebar (Right) --- */}
-      <aside className={`fixed bottom-3 right-3 top-[78px] z-[90] flex w-[min(420px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl transition-transform duration-500 ease-in-out lg:relative lg:inset-auto lg:z-30 lg:w-full lg:max-w-[360px] lg:rounded-none lg:border-y-0 lg:border-r-0 xl:max-w-[400px] ${
-        isMobileSidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'
+      <aside className={`fixed bottom-2 right-2 top-[calc(env(safe-area-inset-top)+68px)] z-[90] w-[min(420px,calc(100vw-16px))] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl transition-transform duration-500 ease-in-out lg:relative lg:inset-auto lg:z-30 lg:flex lg:w-full lg:max-w-[360px] lg:translate-x-0 lg:rounded-none lg:border-y-0 lg:border-r-0 xl:max-w-[400px] ${
+        isMobileSidebarOpen ? 'flex translate-x-0' : 'hidden translate-x-full'
       }`}>
         {/* Mobile Sidebar Close Backdrop */}
         <AnimatePresence>

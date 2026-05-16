@@ -570,7 +570,7 @@ const App: React.FC = () => {
 
   return (
     <MotionConfig reducedMotion="user" transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}>
-    <div className="app-shell-grid relative flex h-screen w-screen flex-col overflow-hidden text-[var(--color-text)] font-sans antialiased">
+    <div className="app-shell-grid relative flex h-[100dvh] w-screen flex-col overflow-hidden text-[var(--color-text)] font-sans antialiased">
       <header className="studio-topbar relative z-40 flex min-h-[68px] items-center gap-4 px-3 sm:px-5">
         <button
           onClick={() => handleNavigate('dashboard')}

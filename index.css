@@ -58,6 +58,7 @@ body,
 
 html {
   touch-action: manipulation;
+  overscroll-behavior: none;
 }
 
 body {
@@ -72,6 +73,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
   position: relative;
+  overscroll-behavior: none;
 }
 
 /* Typography Overrides */
@@ -286,20 +288,90 @@ textarea:focus, input[type="text"]:focus, input[type="password"]:focus, select:f
 }
 
 @media (max-width: 767px) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+
+  body {
+    position: fixed;
+    inset: 0;
+  }
+
+  .app-shell-grid {
+    height: 100dvh;
+    max-height: 100dvh;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
   .studio-topbar {
-    min-height: 62px;
+    min-height: calc(54px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+    gap: 0.5rem;
+  }
+
+  .studio-topbar > button {
+    height: 2.375rem;
+    width: 2.375rem;
+  }
+
+  .studio-nav-pill {
+    height: 2.375rem;
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+    font-size: 0.75rem;
   }
 
   .studio-nav-pill span:last-child {
-    max-width: 8.5rem;
+    max-width: 6.75rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
+  .mobile-reference-workspace {
+    min-height: 0;
+  }
+
+  .mobile-settings-fab {
+    top: calc(env(safe-area-inset-top) + 62px);
+  }
+
+  .mobile-image-tray {
+    max-height: clamp(76px, 18dvh, 108px);
+  }
+
+  .mobile-image-tray .group > button:first-child {
+    width: clamp(52px, 15vw, 64px);
+    height: clamp(64px, 18vw, 80px);
+  }
+
+  .mobile-editor-dock {
+    min-height: 54px;
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+
+  .mobile-editor-dock .btn-secondary,
+  .mobile-editor-dock button {
+    min-height: 2.25rem;
+  }
+
   .react-transform-wrapper,
   .react-transform-component {
     touch-action: none;
+  }
+}
+
+@media (max-width: 767px) and (max-height: 680px) {
+  .mobile-image-tray {
+    padding-top: 0.45rem;
+    padding-bottom: 0.45rem;
+  }
+
+  .mobile-editor-dock {
+    padding-top: 0.35rem;
+    padding-bottom: max(0.35rem, env(safe-area-inset-bottom));
   }
 }
 
