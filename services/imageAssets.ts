@@ -1,5 +1,5 @@
 import type { ImageState } from '../types';
-import { processImageDataUrl, type EditImageQualityMode } from './geminiService';
+import { normalizeGeminiImageMimeType, processImageDataUrl, type EditImageQualityMode } from './geminiService';
 
 export function getImageSrc(image?: ImageState | null): string | null {
   if (!image) return null;
@@ -43,7 +43,13 @@ export async function imageToDataUrl(image: ImageState): Promise<string> {
 
 export async function imageToGeminiInput(image: ImageState, mode: EditImageQualityMode = 'single'): Promise<ImageState> {
   if (image.base64 && image.mimeType && mode === 'single') {
-    return image;
+    const normalizedMimeType = normalizeGeminiImageMimeType(image.mimeType);
+    if (normalizedMimeType === image.mimeType.toLowerCase()) {
+      return {
+        ...image,
+        mimeType: normalizedMimeType,
+      };
+    }
   }
 
   const dataUrl = await imageToDataUrl(image);

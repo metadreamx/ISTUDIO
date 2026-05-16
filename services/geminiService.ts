@@ -15,7 +15,7 @@ const getAiClient = () => {
     }
 
     if (!API_KEY) {
-      throw new Error("API_KEY not found. Please select an API key using the platform dialog or enter it in settings.");
+      throw new Error("Gemini API key is missing. On iPhone, tap Settings and enter your Google Gemini API key before analyzing or generating.");
     }
     return new GoogleGenAI({ apiKey: API_KEY });
 };
@@ -40,6 +40,18 @@ function saveToCache(key: string, value: any): void {
   }
 }
 
+function toUserFacingGeminiError(error: any): Error {
+    const message = String(error?.message || error || '');
+    const status = Number(error?.status || error?.code || 0);
+    if (status === 401 || status === 403 || message.includes('API key') || message.includes('API_KEY') || message.includes('Forbidden') || message.includes('PERMISSION_DENIED') || message.includes('Requested entity was not found')) {
+      return new Error("Gemini could not use this API key. On iPhone, open Settings, re-enter a valid Google Gemini API key, and make sure the key allows requests from https://metadreamx.github.io/*.");
+    }
+    if (message.includes('Failed to fetch') || message.includes('NetworkError') || message.includes('Load failed')) {
+      return new Error("Gemini could not be reached from this browser. Check your connection, disable content blockers for ISTUDIO, and make sure your API key is allowed for the GitHub Pages app.");
+    }
+    return error instanceof Error ? error : new Error(message || 'Gemini request failed.');
+}
+
 // Retry logic for transient API errors (429 Quota, 503 Overloaded, 500 Internal)
 async function generateWithRetry<T>(operation: () => Promise<T>, retries = 5, delay = 3000): Promise<T> {
     try {
@@ -57,7 +69,7 @@ async function generateWithRetry<T>(operation: () => Promise<T>, retries = 5, de
         // Handle "Forbidden" errors which often indicate a key selection issue in the shared environment
         if (message.includes('Forbidden') || message.includes('Requested entity was not found')) {
             console.error("Gemini API Forbidden error. This usually means the API key is missing, invalid, or lacks permissions for the selected model.");
-            throw new Error("API access forbidden. Please ensure you have selected a valid API key from a paid Google Cloud project.");
+            throw toUserFacingGeminiError(error);
         }
 
         const isTransient = code === 429 || code === 503 || code === 500 || message.includes('overloaded') || message.includes('Internal Server Error') || message.includes('UNAVAILABLE') || message.includes('RESOURCE_EXHAUSTED');
@@ -69,7 +81,7 @@ async function generateWithRetry<T>(operation: () => Promise<T>, retries = 5, de
         }
         
         console.error(`Gemini API fatal error (${code}): ${message}`);
-        throw error;
+        throw toUserFacingGeminiError(error);
     }
 }
 
@@ -78,11 +90,19 @@ const imageAnalysisModel = 'gemini-3-flash-preview';
 const imageEditModel = 'gemini-3.1-flash-image-preview';
 export type EditImageQualityMode = 'single' | 'batch';
 
+const SUPPORTED_GEMINI_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+export function normalizeGeminiImageMimeType(mimeType: string | null | undefined): string {
+  const normalized = (mimeType || 'image/jpeg').toLowerCase();
+  if (normalized === 'image/jpg') return 'image/jpeg';
+  return SUPPORTED_GEMINI_IMAGE_MIME_TYPES.has(normalized) ? normalized : 'image/jpeg';
+}
+
 const fileToGenerativePart = (base64: string, mimeType: string) => {
     return {
         inlineData: {
             data: base64,
-            mimeType,
+            mimeType: normalizeGeminiImageMimeType(mimeType),
         },
     };
 };
@@ -246,13 +266,13 @@ export async function processAndResizeImage(file: File, mode: EditImageQualityMo
     });
 }
 
-export async function detectTransferableElements(base64Image: string): Promise<StyleCategory[]> {
+export async function detectTransferableElements(base64Image: string, mimeType = 'image/jpeg'): Promise<StyleCategory[]> {
     const base64Hash = await hashString(base64Image);
     const cacheKey = `gemini_cache_detectTransferableElements_${base64Hash}`;
     const cachedResult = getFromCache(cacheKey);
     if (cachedResult) return cachedResult;
 
-    const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+    const imagePart = fileToGenerativePart(base64Image, mimeType);
     const prompt = `Analyze the provided reference image with microscopic detail. Your objective is to deconstruct its visual DNA into a comprehensive, categorized list of every transferable stylistic and content element. You must identify specific, direct elements (e.g., specific patterns, lighting setups, color combinations, textures) that can be directly mapped and transferred. Do not just describe concepts or ideas; extract the concrete visual components that constitute the style. Be exhaustive.
 
 For each element you identify, provide:
@@ -354,13 +374,13 @@ Return the result as a JSON object that strictly adheres to the provided schema.
 /**
  * Analyzes a reference image to create a scene blueprint for consistency.
  */
-export async function analyzeReferenceScene(base64Image: string): Promise<string> {
+export async function analyzeReferenceScene(base64Image: string, mimeType = 'image/jpeg'): Promise<string> {
   const base64Hash = await hashString(base64Image);
   const cacheKey = `gemini_cache_analyzeReferenceScene_${base64Hash}`;
   const cachedResult = getFromCache(cacheKey);
   if (cachedResult) return cachedResult;
 
-  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const imagePart = fileToGenerativePart(base64Image, mimeType);
   const prompt = `Perform a deep forensic analysis of this reference image to extract its "Visual DNA" and "Spatial Blueprint". 
   Your goal is to provide a technical specification that allows another artist to perfectly replicate the look, feel, and layout.
   
@@ -388,13 +408,13 @@ export async function analyzeReferenceScene(base64Image: string): Promise<string
 /**
  * Generates a detailed text analysis of a target image's content.
  */
-export async function analyzeTargetImageDetails(base64Image: string): Promise<string> {
+export async function analyzeTargetImageDetails(base64Image: string, mimeType = 'image/jpeg'): Promise<string> {
   const base64Hash = await hashString(base64Image);
   const cacheKey = `gemini_cache_analyzeTargetImageDetails_v2_${base64Hash}`;
   const cachedResult = getFromCache(cacheKey);
   if (cachedResult) return cachedResult;
 
-  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const imagePart = fileToGenerativePart(base64Image, mimeType);
   const prompt = `Analyze the target image and provide a factual description of its core content for geometric locking and subject-lit outpainting.
   - **Pose:** Describe subject's pose, head tilt, chin height, shoulder alignment.
   - **Identity:** Describe facial landmarks (nose, jawline, eyes, teeth, skin tone).
@@ -417,13 +437,13 @@ export async function analyzeTargetImageDetails(base64Image: string): Promise<st
 /**
  * Analyzes an image of a clothing item and returns a text description.
  */
-export async function analyzeClothingImage(base64Image: string): Promise<string> {
+export async function analyzeClothingImage(base64Image: string, mimeType = 'image/jpeg'): Promise<string> {
   const base64Hash = await hashString(base64Image);
   const cacheKey = `gemini_cache_analyzeClothingImage_${base64Hash}`;
   const cachedResult = getFromCache(cacheKey);
   if (cachedResult) return cachedResult;
 
-  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const imagePart = fileToGenerativePart(base64Image, mimeType);
   const prompt = "Describe the clothing item in this image in detail. Focus on the type of clothing (e.g., 'a blue denim jacket'), its material, fit, color, and any patterns or logos. Be concise and descriptive, as if instructing an artist. Example: 'A vintage, slightly oversized, faded blue denim jacket with copper buttons and a small tear on the left sleeve.'";
 
   const ai = getAiClient();
@@ -440,13 +460,13 @@ export async function analyzeClothingImage(base64Image: string): Promise<string>
 /**
  * Analyzes an image of an accessory item and returns a text description.
  */
-export async function analyzeAccessoryImage(base64Image: string): Promise<string> {
+export async function analyzeAccessoryImage(base64Image: string, mimeType = 'image/jpeg'): Promise<string> {
   const base64Hash = await hashString(base64Image);
   const cacheKey = `gemini_cache_analyzeAccessoryImage_${base64Hash}`;
   const cachedResult = getFromCache(cacheKey);
   if (cachedResult) return cachedResult;
 
-  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const imagePart = fileToGenerativePart(base64Image, mimeType);
   const prompt = "Describe the accessory item in this image in detail. Focus on the type of accessory (e.g., 'a gold necklace', 'a black fedora hat', 'aviator sunglasses'), its material, style, color, and any distinct features. Be concise and descriptive. Example: 'A delicate, thin 18k gold chain necklace with a small circular pendant.'";
 
   const ai = getAiClient();
@@ -462,13 +482,13 @@ export async function analyzeAccessoryImage(base64Image: string): Promise<string
 /**
  * Analyzes an image of a face and returns a detailed text description of its features.
  */
-export async function analyzeFaceImage(base64Image: string): Promise<string> {
+export async function analyzeFaceImage(base64Image: string, mimeType = 'image/jpeg'): Promise<string> {
   const base64Hash = await hashString(base64Image);
   const cacheKey = `gemini_cache_analyzeFaceImage_${base64Hash}`;
   const cachedResult = getFromCache(cacheKey);
   if (cachedResult) return cachedResult;
 
-  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const imagePart = fileToGenerativePart(base64Image, mimeType);
   const prompt = "Describe the key facial features of the person in this image in detail. Focus on face shape (e.g., oval, square), eye color and shape (e.g., almond-shaped, blue), nose shape (e.g., button nose, prominent bridge), lip shape (e.g., full, thin), and any distinctive features like freckles, dimples, or specific eyebrow shape. Be concise and descriptive, as if instructing a portrait artist. Example: 'An oval face with high cheekbones, deep-set green eyes, a straight nose, and full lips. She has light freckles across her nose and cheeks.'";
 
   const ai = getAiClient();
@@ -484,13 +504,13 @@ export async function analyzeFaceImage(base64Image: string): Promise<string> {
 /**
  * Analyzes an image of a background/scene and returns a detailed text description.
  */
-export async function analyzeBackgroundImage(base64Image: string): Promise<string> {
+export async function analyzeBackgroundImage(base64Image: string, mimeType = 'image/jpeg'): Promise<string> {
   const base64Hash = await hashString(base64Image);
   const cacheKey = `gemini_cache_analyzeBackgroundImage_${base64Hash}`;
   const cachedResult = getFromCache(cacheKey);
   if (cachedResult) return cachedResult;
 
-  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const imagePart = fileToGenerativePart(base64Image, mimeType);
   const prompt = `Perform a professional, VFX-level forensic lighting and scene analysis on the provided background image. The goal is to create a comprehensive "lighting and integration blueprint" for a photorealistic composite. Your analysis MUST be structured as a bulleted list, covering these specific points with extreme technical detail:
 - **Environment:** A one-sentence description of the scene (e.g., 'A sun-drenched, sandy beach at golden hour.').
 - **Primary Light Source (Key Light):** Describe the main light. Include its direction (e.g., 'from high top-right'), quality (e.g., 'Hard, direct sunlight with sharp specularity' or 'Soft, heavily diffused light from a large overcast sky'), and color temperature (e.g., 'Warm, golden light, approx 3500K').
@@ -515,13 +535,13 @@ Your output must be this structured list. Be as precise as a professional 3D lig
 /**
  * Analyzes an image of a sky and returns a detailed text description.
  */
-export async function analyzeSkyImage(base64Image: string): Promise<string> {
+export async function analyzeSkyImage(base64Image: string, mimeType = 'image/jpeg'): Promise<string> {
   const base64Hash = await hashString(base64Image);
   const cacheKey = `gemini_cache_analyzeSkyImage_${base64Hash}`;
   const cachedResult = getFromCache(cacheKey);
   if (cachedResult) return cachedResult;
 
-  const imagePart = fileToGenerativePart(base64Image, 'image/jpeg');
+  const imagePart = fileToGenerativePart(base64Image, mimeType);
   const prompt = `Analyze this sky image for the purpose of a photorealistic sky replacement. Describe the following in detail:
   - **Cloud Structure:** Type, density, altitude (e.g., wispy cirrus, dramatic cumulonimbus, clear blue).
   - **Lighting & Color:** Sun position (implied), color temperature (e.g., golden hour warm, noon cool), gradient shifts from horizon to zenith.

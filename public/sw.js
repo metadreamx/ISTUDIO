@@ -1,4 +1,4 @@
-const CACHE_NAME = 'istudio-pwa-shell-v3';
+const CACHE_NAME = 'istudio-pwa-shell-v4';
 
 const shellUrls = [
   './',
@@ -28,6 +28,19 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
 
   if (request.method !== 'GET' || url.pathname.includes('/api/')) {
+    return;
+  }
+
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request).then((response) => {
+        if (response && response.status === 200) {
+          const responseToCache = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put('./', responseToCache));
+        }
+        return response;
+      }).catch(() => caches.match('./'))
+    );
     return;
   }
 

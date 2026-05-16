@@ -885,9 +885,9 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
             throw new Error('Could not load the reference image from the project folder.');
           }
           const [itemsResult, colorResult, blueprintResult] = await Promise.allSettled([
-            withReferenceAnalysisTimeout(detectTransferableElements(analysisImage.base64), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Visual DNA analysis'),
+            withReferenceAnalysisTimeout(detectTransferableElements(analysisImage.base64, analysisImage.mimeType), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Visual DNA analysis'),
             withReferenceAnalysisTimeout(getDominantColor(analysisImage.base64, analysisImage.mimeType), COLOR_ANALYSIS_TIMEOUT_MS, 'Color analysis'),
-            withReferenceAnalysisTimeout(analyzeReferenceScene(analysisImage.base64), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Scene blueprint analysis')
+            withReferenceAnalysisTimeout(analyzeReferenceScene(analysisImage.base64, analysisImage.mimeType), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Scene blueprint analysis')
           ]);
           
           if (isCancelled) return;
@@ -998,15 +998,15 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
   const prepareCustomAsset = useCallback(async (
     imageState: ImageState,
-    analyzer: (base64: string) => Promise<string>,
+    analyzer: (base64: string, mimeType: string) => Promise<string>,
   ): Promise<{ storedImage: ImageState; analysis: string }> => {
     const analysisInput = await imageToGeminiInput(imageState, 'single');
-    if (!analysisInput.base64) {
+    if (!analysisInput.base64 || !analysisInput.mimeType) {
       throw new Error('Could not prepare the custom asset for analysis.');
     }
     const [storedImage, analysis] = await Promise.all([
       persistProjectImage(imageState, 'assets'),
-      analyzer(analysisInput.base64),
+      analyzer(analysisInput.base64, analysisInput.mimeType),
     ]);
     return { storedImage, analysis };
   }, [persistProjectImage]);
@@ -1225,9 +1225,13 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         if (!targetInput.base64 || !targetInput.mimeType) {
           throw new Error('Could not load the project images for generation.');
         }
+        const referenceInput = await imageToGeminiInput(referenceImage, qualityMode);
+        if (!referenceInput.base64 || !referenceInput.mimeType) {
+          throw new Error('Could not load the reference image for generation.');
+        }
 
         setGenerationStatus('analyzing_target');
-        const targetImageAnalysis = await analyzeTargetImageDetails(targetInput.base64);
+        const targetImageAnalysis = await analyzeTargetImageDetails(targetInput.base64, targetInput.mimeType);
         if (cancelGenerationRef.current) throw new Error("Cancelled");
         
         setGenerationStatus('generating');
@@ -1463,7 +1467,9 @@ Apply the style from the Reference Image with a decay factor (alpha) to prevent 
         const prompt = `
 **IMAGE INPUTS:**
 - IMAGE 1: The Target Image (Subject to be styled and composited).
-${isStatefulIteration ? '- IMAGE 2: The Anchor Scene (The exact background and lighting environment to reuse).' : ''}
+${isStatefulIteration
+  ? '- IMAGE 2: The Anchor Scene (The exact background and lighting environment to reuse).\n- IMAGE 3: The Reference DNA image. Use it as the direct visual source for background, lighting, color, mood, texture, spatial DNA, and final finish.'
+  : '- IMAGE 2: The Reference DNA image. Use it as the direct visual source for background, lighting, color, mood, texture, spatial DNA, and final finish.'}
 - SUBSEQUENT IMAGES (if any): Custom elements (clothing, accessories, faces, backgrounds) to apply.
 
 **PRIME DIRECTIVE: ABSOLUTE GEOMETRIC LOCK & SUBJECT INTEGRITY (NON-NEGOTIABLE)**
@@ -1554,6 +1560,10 @@ Before outputting, verify:
                 inlineData: anchorInline
             });
         }
+
+        imageParts.push({
+            inlineData: { data: referenceInput.base64, mimeType: referenceInput.mimeType }
+        });
 
         const activeItemInputs = await Promise.all(activeItems.map(item => imageToGeminiInput(item.image, qualityMode)));
         imageParts.push(...activeItemInputs
