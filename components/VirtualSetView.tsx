@@ -48,6 +48,7 @@ import {
   PhysicalSpotLight,
   ShapedAreaLight,
 } from 'three-gpu-pathtracer';
+import { getImageSrc } from '../services/imageAssets';
 import type {
   ImageState,
   Project,
@@ -634,8 +635,7 @@ const imageStateFromDataUrl = (dataUrl: string, fileName: string, width: number 
   };
 };
 
-const dataUrlFromImage = (image: ImageState) =>
-  image.base64 && image.mimeType ? `data:${image.mimeType};base64,${image.base64}` : null;
+const dataUrlFromImage = (image: ImageState) => getImageSrc(image);
 
 const assetDataUrl = (scene: VirtualSetScene, assetId?: string | null) => {
   const dataUrl = scene.assets.find((asset) => asset.id === assetId)?.dataUrl;

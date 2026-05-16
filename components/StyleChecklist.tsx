@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import type { StyleCategory, StyleSubItem, CustomClothingItem, ImageState, CustomAccessoryItem, CustomFaceItem, CustomBackgroundItem, CustomSkyItem } from '../types';
 import { ChevronDownIcon, CloseIcon, SpinnerIcon, XCircleIcon, TextIcon, SparklesIcon, CheckIcon } from '@/components/icons';
 import { ImageUploader } from './ImageUploader';
+import { hasImageSource } from '../services/imageAssets';
 
 interface StyleChecklistProps {
   items: StyleCategory[];
@@ -321,7 +322,7 @@ const CustomBackgroundPanel: React.FC<{
                             </motion.div>
                         )}
                     </AnimatePresence>
-                    {item.image.base64 && (
+                    {hasImageSource(item.image) && (
                          <button 
                             onClick={onRemove} 
                             className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] bg-black/80 text-white transition-all hover:bg-red-500"
@@ -396,7 +397,7 @@ const CustomSkyPanel: React.FC<{
                             </motion.div>
                         )}
                     </AnimatePresence>
-                    {item.image.base64 && (
+                    {hasImageSource(item.image) && (
                          <button 
                             onClick={onRemove} 
                             className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] bg-black/80 text-white transition-all hover:bg-red-500"

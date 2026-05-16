@@ -130,6 +130,24 @@ export async function saveProject(project: Project): Promise<void> {
     }, 120000);
 }
 
+export async function saveProjectAsset(
+    projectId: string,
+    image: ImageState,
+    bucket: 'reference' | 'targets' | 'outputs' | 'assets' | 'tether/inbox' = 'assets',
+): Promise<ImageState> {
+    return await apiRequest<ImageState>(`${PROJECTS_API}/${encodeURIComponent(projectId)}/assets`, {
+        method: 'POST',
+        body: JSON.stringify({
+            bucket,
+            image,
+            fileName: image.fileName,
+            mimeType: image.mimeType,
+            width: image.width ?? null,
+            height: image.height ?? null,
+        }),
+    }, 120000);
+}
+
 export async function getProjects(): Promise<Project[]> {
     const serverProjects = await apiRequest<Project[]>(`${PROJECTS_API}?summary=1`);
     await migrateIndexedDbProjectsToFolder(serverProjects);

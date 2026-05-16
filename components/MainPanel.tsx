@@ -8,6 +8,7 @@ import { ImageUploader } from './ImageUploader';
 import { Tooltip } from './Tooltip';
 import JSZip from 'jszip';
 import { processAndResizeImage } from '../services/geminiService';
+import { getImageSrc } from '../services/imageAssets';
 
 type GenerationStatus = 'idle' | 'analyzing_target' | 'generating' | 'saving';
 
@@ -37,6 +38,21 @@ const convertDataUrl = async (dataUrl: string, format: ExportFormat, quality: nu
         };
         img.onerror = () => resolve({ dataUrl, mime: 'image/png' }); // fallback on error
         img.src = dataUrl;
+    });
+};
+
+const sourceToDataUrl = async (source: string): Promise<string> => {
+    if (source.startsWith('data:')) return source;
+    const response = await fetch(source);
+    if (!response.ok) {
+        throw new Error('Could not load the saved image for export.');
+    }
+    const blob = await response.blob();
+    return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('Could not read the saved image for export.'));
+        reader.readAsDataURL(blob);
     });
 };
 
@@ -92,6 +108,7 @@ const ImageStrip: React.FC<{
                 {images.map((image, index) => {
                     const isActive = index === activeIndex;
                     const isSelected = selectedIds.has(image.id);
+                    const targetSrc = getImageSrc(image.target);
                     return (
                         <div key={image.id} ref={isActive ? activeRef : null} className="relative flex-shrink-0 group">
                             <button
@@ -100,7 +117,7 @@ const ImageStrip: React.FC<{
                                 aria-label={`Select image ${index + 1}`}
                                 aria-current={isActive}
                             >
-                                <img src={`data:${image.target.mimeType};base64,${image.target.base64}`} className="w-full h-full object-cover" alt={`Target image ${index + 1}`} />
+                                {targetSrc && <img src={targetSrc} className="w-full h-full object-cover" alt={`Target image ${index + 1}`} />}
                             </button>
                             
                             {/* Selection Checkbox */}
@@ -145,7 +162,7 @@ interface MainPanelProps {
   allTargets: BatchImage[];
   activeIndex: number;
   onSelectIndex: (index: number) => void;
-  onImagesSelect: (states: ImageState[]) => void;
+  onImagesSelect: (states: ImageState[]) => void | Promise<void>;
   onRemoveImage: (id: string) => void;
   generationStatus: GenerationStatus;
   referenceImage: ImageState;
@@ -221,19 +238,15 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
       const imageFiles = files.filter(f => f.type.startsWith('image/'));
       if (imageFiles.length === 0) return;
 
-      const processedImages = await Promise.all(imageFiles.map(async (file) => {
+      const mode = imageFiles.length > 1 ? 'batch' : 'single';
+      for (const file of imageFiles) {
           try {
-              return await processAndResizeImage(file);
+              const image = await processAndResizeImage(file, mode);
+              await onImagesSelect([image]);
           } catch (e) {
               console.error(`Failed to process ${file.name}:`, e);
               alert(e instanceof Error ? e.message : `Failed to process ${file.name}`);
-              return null;
           }
-      }));
-
-      const validImages = processedImages.filter((img): img is ImageState => img !== null);
-      if (validImages.length > 0) {
-          onImagesSelect(validImages);
       }
   }, [onImagesSelect]);
 
@@ -282,7 +295,8 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
   
   const handleSingleDownload = useCallback(async () => {
     if (activeTarget?.generated) {
-      const { dataUrl } = await convertDataUrl(activeTarget.generated, exportFormat, exportQuality);
+      const generatedDataUrl = await sourceToDataUrl(activeTarget.generated);
+      const { dataUrl } = await convertDataUrl(generatedDataUrl, exportFormat, exportQuality);
       const link = document.createElement('a');
       link.href = dataUrl;
       const originalName = activeTarget.target.fileName!.replace(/\.[^/.]+$/, "");
@@ -305,7 +319,8 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
     }
 
     for (const image of generatedImages) {
-        const { dataUrl } = await convertDataUrl(image.generated!, exportFormat, exportQuality);
+        const generatedDataUrl = await sourceToDataUrl(image.generated!);
+        const { dataUrl } = await convertDataUrl(generatedDataUrl, exportFormat, exportQuality);
         const response = await fetch(dataUrl);
         const blob = await response.blob();
         const originalName = image.target.fileName!.replace(/\.[^/.]+$/, "");
@@ -370,6 +385,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
   const glowStyle: React.CSSProperties = activeTarget?.dominantColor ? {
     boxShadow: `0 0 50px 10px ${activeTarget.dominantColor.replace('rgb', 'rgba').replace(')', ', 0.3)')}`,
   } : {};
+  const activeTargetSrc = getImageSrc(activeTarget?.target);
   
   const steps = [
     { id: 'analyzing_target', title: 'Reading target photo' },
@@ -443,7 +459,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                       <img
                           src={activeImage === 'generated'
                             ? activeTarget.generated!
-                            : `data:${activeTarget.target.mimeType};base64,${activeTarget.target.base64}`}
+                            : activeTargetSrc || ''}
                           alt={activeImage === 'target' ? "Target" : "Generated"}
                           className={`max-w-full max-h-full object-contain block rounded shadow-2xl transition-[opacity,filter,transform] duration-700 ${
                               activeImage === 'generated' && animateIn ? 'frosted-fade-in' : ''
@@ -459,7 +475,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                 <div className="group relative aspect-square overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl md:aspect-auto">
                   <TransformWrapper ref={originalSideRef} initialScale={1} centerOnInit={true} onTransformed={handleOriginalTransform}>
                     <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
-                      <img src={`data:${activeTarget.target.mimeType};base64,${activeTarget.target.base64}`} alt="Original" className="max-w-full max-h-full object-contain block" />
+                      {activeTargetSrc && <img src={activeTargetSrc} alt="Original" className="max-w-full max-h-full object-contain block" />}
                     </TransformComponent>
                   </TransformWrapper>
                   <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-white/10 bg-black/70 px-2.5 py-1 text-xs font-semibold text-white/75">Target Photo</div>

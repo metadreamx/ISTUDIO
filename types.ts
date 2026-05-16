@@ -9,6 +9,8 @@ export interface ImageState {
   mimeType: string | null;
   width?: number | null;
   height?: number | null;
+  assetPath?: string | null;
+  assetUrl?: string | null;
 }
 
 export interface ImageTransferState {

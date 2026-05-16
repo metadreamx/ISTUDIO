@@ -11,7 +11,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECTS_DIR = path.resolve(process.env.ISTUDIO_PROJECTS_DIR || path.join(process.cwd(), 'projects'));
 const PROJECT_JSON = 'project.json';
-const PROJECT_PAYLOAD_LIMIT = process.env.ISTUDIO_PROJECT_PAYLOAD_LIMIT || '2gb';
+const PROJECT_PAYLOAD_LIMIT = process.env.ISTUDIO_PROJECT_PAYLOAD_LIMIT || '128mb';
 const PROJECT_SCAN_MAX_DEPTH = 6;
 const PROJECT_SCAN_IGNORED_DIRS = new Set([
   '.git',
@@ -75,6 +75,17 @@ type StoredImageState = {
   width?: number | null;
   height?: number | null;
   assetPath?: string;
+  assetUrl?: string;
+};
+
+type ImageAssetPayload = {
+  bucket?: string;
+  image?: StoredImageState;
+  dataUrl?: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+  width?: number | null;
+  height?: number | null;
 };
 
 type ImportableImageFile = {
@@ -214,6 +225,10 @@ function relativeAssetPath(projectDir: string, absolutePath: string): string {
   return path.relative(projectDir, absolutePath).replace(/\\/g, '/');
 }
 
+function assetUrlForProject(projectId: string, storedPath: string): string {
+  return `/api/projects/${encodeURIComponent(projectId)}/assets/${storedPath.split('/').map(encodeURIComponent).join('/')}`;
+}
+
 function resolveProjectPath(projectDir: string, relativePath: string): string {
   const absolutePath = path.resolve(projectDir, relativePath);
   const projectRoot = path.resolve(projectDir);
@@ -276,6 +291,29 @@ async function resolvePortableProjectAsset(projectDir: string, storedPath: strin
 
   const fileName = pathValue.split(/[\\/]/).filter(Boolean).at(-1);
   return fileName ? findProjectAssetByName(projectDir, fileName) : null;
+}
+
+const ALLOWED_ASSET_BUCKETS = new Set([
+  'reference',
+  'targets',
+  'outputs',
+  'assets',
+  'tether/inbox',
+  'virtual-set/assets',
+  'virtual-set/renders',
+  'virtual-set/thumbnails',
+  'virtual-set/scenes',
+  'editor/assets',
+  'editor/originals',
+  'editor/layers',
+  'editor/exports',
+  'editor/masks',
+]);
+
+function safeAssetBucket(value: unknown): string {
+  if (typeof value !== 'string') return 'assets';
+  const normalized = value.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  return ALLOWED_ASSET_BUCKETS.has(normalized) ? normalized : 'assets';
 }
 
 function importedProjectId(projectDir: string): string {
@@ -465,7 +503,7 @@ async function readRawProjectFile(filePath: string): Promise<StoredProject | nul
   }
 }
 
-async function hydrateValue(value: unknown, projectDir: string): Promise<unknown> {
+async function hydrateValue(value: unknown, projectDir: string, projectId: string, segments: string[] = []): Promise<unknown> {
   if (typeof value === 'string') {
     return value;
   }
@@ -476,31 +514,42 @@ async function hydrateValue(value: unknown, projectDir: string): Promise<unknown
       console.warn(`Missing imported project asset: ${path.join(projectDir, value.path)}`);
       return '';
     }
-    const base64 = await fs.readFile(assetPath, 'base64');
-    return `data:${value.mimeType};base64,${base64}`;
+    return assetUrlForProject(projectId, relativeAssetPath(projectDir, assetPath));
   }
 
   if (isImageState(value)) {
     if (value.assetPath && value.mimeType) {
       const assetPath = await resolvePortableProjectAsset(projectDir, value.assetPath);
-      const { assetPath: _assetPath, ...imageState } = value;
       if (!assetPath) {
         console.warn(`Missing imported project image: ${path.join(projectDir, value.assetPath)}`);
-        return { ...imageState, base64: null };
+        return { ...value, base64: null, assetUrl: null };
       }
-      const base64 = await fs.readFile(assetPath, 'base64');
-      return { ...imageState, base64 };
+      const portablePath = relativeAssetPath(projectDir, assetPath);
+      return {
+        ...value,
+        base64: null,
+        assetPath: portablePath,
+        assetUrl: assetUrlForProject(projectId, portablePath),
+      };
+    }
+    if (value.base64 && value.mimeType) {
+      const storedImage = await persistImageState(value, projectDir, segments);
+      return {
+        ...storedImage,
+        base64: null,
+        assetUrl: storedImage.assetPath ? assetUrlForProject(projectId, storedImage.assetPath) : null,
+      };
     }
     return value;
   }
 
   if (Array.isArray(value)) {
-    return Promise.all(value.map((item) => hydrateValue(item, projectDir)));
+    return Promise.all(value.map((item, index) => hydrateValue(item, projectDir, projectId, [...segments, String(index)])));
   }
 
   if (isRecord(value)) {
     const hydratedEntries = await Promise.all(
-      Object.entries(value).map(async ([key, entryValue]) => [key, await hydrateValue(entryValue, projectDir)]),
+      Object.entries(value).map(async ([key, entryValue]) => [key, await hydrateValue(entryValue, projectDir, projectId, [...segments, key])]),
     );
     return Object.fromEntries(hydratedEntries);
   }
@@ -513,17 +562,17 @@ async function readProjectFromDirectory(projectDir: string): Promise<StoredProje
   const project = await readRawProjectFile(projectPath);
   if (!project) {
     const importedProject = await safeReadImportedProjectFromFiles(projectDir);
-    return importedProject ? await hydrateValue(importedProject, projectDir) as StoredProject : null;
+    return importedProject ? await hydrateValue(importedProject, projectDir, importedProject.id) as StoredProject : null;
   }
 
   try {
-    return await hydrateValue(project, projectDir) as StoredProject;
+    return await hydrateValue(project, projectDir, project.id) as StoredProject;
   } catch (error) {
     console.warn(`Recovering project with missing or invalid data: ${projectPath}`, error);
     const importedProject = await safeReadImportedProjectFromFiles(projectDir);
     if (importedProject) {
       try {
-        return await hydrateValue(importedProject, projectDir) as StoredProject;
+        return await hydrateValue(importedProject, projectDir, importedProject.id) as StoredProject;
       } catch (importError) {
         console.warn(`Imported recovery project could not be hydrated: ${projectDir}`, importError);
       }
@@ -619,7 +668,10 @@ async function findLegacyProjectFile(id: string): Promise<string | null> {
 }
 
 async function persistImageState(value: StoredImageState, projectDir: string, segments: string[]): Promise<StoredImageState> {
-  if (!value.base64 || !value.mimeType) return value;
+  if (!value.base64 || !value.mimeType) {
+    const { assetUrl: _assetUrl, ...portableValue } = value;
+    return portableValue;
+  }
 
   const bucket = assetBucketForPath(segments);
   const baseName = typeof value.fileName === 'string' && value.fileName.trim()
@@ -662,6 +714,61 @@ async function persistDataUrl(value: string, projectDir: string, segments: strin
     path: relativeAssetPath(projectDir, targetPath),
     mimeType: parsed.mimeType,
     fileName: path.basename(targetPath),
+  };
+}
+
+async function writeImageAsset(projectId: string, payload: ImageAssetPayload): Promise<StoredImageState> {
+  const projectDir = await findProjectDir(projectId);
+  if (!projectDir) {
+    throw new Error('Project not found.');
+  }
+
+  const image = payload.image;
+  if (image?.assetPath && image.mimeType && !image.base64) {
+    const assetPath = await resolvePortableProjectAsset(projectDir, image.assetPath);
+    if (!assetPath) {
+      throw new Error('Project image asset could not be found.');
+    }
+    const portablePath = relativeAssetPath(projectDir, assetPath);
+    return {
+      fileName: image.fileName || path.basename(assetPath),
+      base64: null,
+      mimeType: image.mimeType,
+      width: image.width ?? null,
+      height: image.height ?? null,
+      assetPath: portablePath,
+      assetUrl: assetUrlForProject(projectId, portablePath),
+    };
+  }
+
+  const parsed = payload.dataUrl
+    ? parseDataUrl(payload.dataUrl)
+    : image?.base64 && (image.mimeType || payload.mimeType)
+      ? { base64: image.base64, mimeType: image.mimeType || payload.mimeType! }
+      : null;
+  if (!parsed) {
+    throw new Error('Image asset payload must include image data.');
+  }
+
+  const bucket = safeAssetBucket(payload.bucket);
+  const baseName = payload.fileName || image?.fileName || `image-${Date.now()}`;
+  const targetDir = path.join(projectDir, bucket);
+  const targetPath = path.join(targetDir, assetFileName(baseName, parsed.mimeType, parsed.base64));
+
+  await fs.mkdir(targetDir, { recursive: true });
+  if (!existsSync(targetPath)) {
+    await fs.writeFile(targetPath, Buffer.from(parsed.base64, 'base64'));
+  }
+
+  const portablePath = relativeAssetPath(projectDir, targetPath);
+  return {
+    fileName: baseName,
+    base64: null,
+    mimeType: parsed.mimeType,
+    width: payload.width ?? image?.width ?? null,
+    height: payload.height ?? image?.height ?? null,
+    assetPath: portablePath,
+    assetUrl: assetUrlForProject(projectId, portablePath),
   };
 }
 
@@ -945,7 +1052,7 @@ async function importTetherCapture(filePath: string) {
       await fs.writeFile(targetPath, sourceBuffer);
     }
 
-    const base64 = sourceBuffer.toString('base64');
+    const assetPath = relativeAssetPath(projectDir, targetPath);
     const capture: TetherCapture = {
       id: tetherCaptureId(absolutePath, contentHash),
       fileName,
@@ -957,11 +1064,12 @@ async function importTetherCapture(filePath: string) {
       importedAt: Date.now(),
       image: {
         fileName,
-        base64,
+        base64: null,
         mimeType: mimeTypeForExtension(targetPath),
         width: null,
         height: null,
-        assetPath: relativeAssetPath(projectDir, targetPath),
+        assetPath,
+        assetUrl: assetUrlForProject(session.projectId, assetPath),
       },
     };
     addTetherCapture(capture);
@@ -1108,7 +1216,7 @@ async function startServer() {
   const jsonPayloadErrorHandler: ErrorRequestHandler = (error, _req, res, next) => {
     if (error?.type === 'entity.too.large' || error?.status === 413) {
       res.status(413).json({
-        error: `Project save is too large for the local server limit (${PROJECT_PAYLOAD_LIMIT}). Reduce the batch size or raise ISTUDIO_PROJECT_PAYLOAD_LIMIT.`,
+        error: `This project update is larger than ISTUDIO can safely save at once (${PROJECT_PAYLOAD_LIMIT}). Images should save into the project folder one at a time; restart ISTUDIO and try the upload again.`,
       });
       return;
     }
@@ -1144,6 +1252,41 @@ async function startServer() {
     } catch (error) {
       console.error('Failed to read project folder', error);
       res.status(500).json({ error: 'Failed to read project folder.' });
+    }
+  });
+
+  app.get(/^\/api\/projects\/([^/]+)\/assets\/(.+)$/, async (req, res) => {
+    try {
+      const params = req.params as unknown as Record<string, string>;
+      const projectId = decodeURIComponent(params[0] || '');
+      const requestedPath = decodeURIComponent(params[1] || '').replace(/\\/g, '/');
+      const projectDir = await findProjectDir(projectId);
+      if (!projectDir) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+
+      const assetPath = await resolvePortableProjectAsset(projectDir, requestedPath);
+      if (!assetPath || !isInsideDirectory(projectDir, assetPath)) {
+        res.status(404).json({ error: 'Project asset not found.' });
+        return;
+      }
+
+      res.type(mimeTypeForExtension(assetPath));
+      res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+      res.sendFile(assetPath);
+    } catch (error) {
+      console.error('Failed to read project asset', error);
+      res.status(500).json({ error: 'Failed to read project asset.' });
+    }
+  });
+
+  app.post('/api/projects/:id/assets', async (req, res) => {
+    try {
+      res.json(await writeImageAsset(req.params.id, req.body as ImageAssetPayload));
+    } catch (error) {
+      console.error('Failed to save project asset', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to save project asset.' });
     }
   });
 

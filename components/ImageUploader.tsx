@@ -2,13 +2,14 @@ import React, { useCallback, useRef, useState } from 'react';
 import type { ImageState } from '../types';
 import { UploadIcon, SpinnerIcon } from '@/components/icons';
 import { processAndResizeImage } from '../services/geminiService';
+import { getImageSrc, hasImageSource } from '../services/imageAssets';
 
 interface ImageUploaderProps {
   id: string;
   title: string;
   subtitle: string;
   image: ImageState;
-  onImageSelect: (state: ImageState) => void;
+  onImageSelect: (state: ImageState) => void | Promise<void>;
   dominantColor?: string | null;
   compact?: boolean;
   disabled?: boolean;
@@ -19,6 +20,8 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ id, title, subtitl
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const imageSrc = getImageSrc(image);
+  const hasImage = hasImageSource(image);
 
   const processFile = useCallback(async (file: File) => {
     if (!file || isProcessing) return;
@@ -27,7 +30,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ id, title, subtitl
     
     try {
       const imageState = await processAndResizeImage(file);
-      onImageSelect(imageState);
+      await onImageSelect(imageState);
     } catch (error) {
       console.error("Error processing file:", error);
       alert(error instanceof Error ? error.message : "An unknown error occurred during file processing.");
@@ -78,7 +81,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ id, title, subtitl
   }, [processFile, disabled, isProcessing]);
   
   // Dynamic styles - simplified for professional look
-  const glowStyle: React.CSSProperties = (image.base64 && dominantColor) ? {
+  const glowStyle: React.CSSProperties = (hasImage && dominantColor) ? {
     borderColor: dominantColor + '80'
   } : {};
 
@@ -93,9 +96,9 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ id, title, subtitl
         onDrop={handleDrop}
       >
          <div
-            className={`group relative flex h-full w-full items-center justify-center overflow-hidden rounded-md border transition-all duration-300 ${disabled || isProcessing ? '' : 'cursor-pointer'} ${itemCheckedStyle(image.base64 != null, isDragging)} ${isDragging ? 'opacity-100' : ''}`}
+            className={`group relative flex h-full w-full items-center justify-center overflow-hidden rounded-md border transition-all duration-300 ${disabled || isProcessing ? '' : 'cursor-pointer'} ${itemCheckedStyle(hasImage, isDragging)} ${isDragging ? 'opacity-100' : ''}`}
             onClick={handleContainerClick}
-            style={image.base64 ? glowStyle : {}}
+            style={hasImage ? glowStyle : {}}
         >
             <input
                 id={id}
@@ -110,9 +113,9 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ id, title, subtitl
                 <div className="flex items-center justify-center">
                     <SpinnerIcon className="w-4 h-4 animate-spin text-[var(--color-accent)]" />
                 </div>
-            ) : image.base64 ? (
+            ) : imageSrc ? (
                 <img
-                    src={`data:${image.mimeType};base64,${image.base64}`}
+                    src={imageSrc}
                     alt={title}
                     className="h-full w-full object-cover opacity-85 transition-all duration-500 group-hover:opacity-100"
                 />
@@ -138,13 +141,13 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ id, title, subtitl
           {title && <h3 className="text-xs font-semibold text-[var(--color-text-muted)]">{title}</h3>}
       </div>
       <div 
-        className={`group relative aspect-square w-full overflow-hidden rounded-xl border transition-all duration-300 ${disabled || isProcessing ? 'cursor-not-allowed grayscale' : 'cursor-pointer'} ${itemCheckedStyle(image.base64 != null, isDragging)}`}
+        className={`group relative aspect-square w-full overflow-hidden rounded-xl border transition-all duration-300 ${disabled || isProcessing ? 'cursor-not-allowed grayscale' : 'cursor-pointer'} ${itemCheckedStyle(hasImage, isDragging)}`}
         onClick={handleContainerClick}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        style={image.base64 ? glowStyle : {}}
+        style={hasImage ? glowStyle : {}}
       >
         <input
           id={id}
@@ -163,10 +166,10 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ id, title, subtitl
             </div>
         )}
 
-        {image.base64 ? (
+        {imageSrc ? (
           <>
             <img
-                src={`data:${image.mimeType};base64,${image.base64}`}
+                src={imageSrc}
                 alt={title}
                 className="h-full w-full object-cover opacity-90 transition-transform duration-700 group-hover:scale-105 group-hover:opacity-100"
             />

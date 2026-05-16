@@ -76,6 +76,7 @@ async function generateWithRetry<T>(operation: () => Promise<T>, retries = 5, de
 
 const imageAnalysisModel = 'gemini-3-flash-preview';
 const imageEditModel = 'gemini-3.1-flash-image-preview';
+export type EditImageQualityMode = 'single' | 'batch';
 
 const fileToGenerativePart = (base64: string, mimeType: string) => {
     return {
@@ -87,10 +88,19 @@ const fileToGenerativePart = (base64: string, mimeType: string) => {
 };
 
 const MAX_INLINE_REQUEST_BYTES = 18 * 1024 * 1024;
-const EDIT_IMAGE_MAX_LONG_EDGE = 4096;
-const EDIT_IMAGE_MAX_MEGAPIXELS = 18;
-const EDIT_IMAGE_MAX_INLINE_BYTES = 8.5 * 1024 * 1024;
 const EDIT_IMAGE_JPEG_QUALITY = 0.94;
+const EDIT_IMAGE_LIMITS: Record<EditImageQualityMode, { maxLongEdge: number; maxMegapixels: number; maxInlineBytes: number }> = {
+  single: {
+    maxLongEdge: 4096,
+    maxMegapixels: 18,
+    maxInlineBytes: 8.5 * 1024 * 1024,
+  },
+  batch: {
+    maxLongEdge: 3072,
+    maxMegapixels: 10,
+    maxInlineBytes: 5 * 1024 * 1024,
+  },
+};
 
 const passthroughMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -105,11 +115,12 @@ function getMimeTypeFromDataUrl(dataUrl: string, fallback: string): string {
   return mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
 }
 
-function getHighFidelityEditSize(width: number, height: number): { width: number; height: number; resized: boolean } {
+function getHighFidelityEditSize(width: number, height: number, mode: EditImageQualityMode): { width: number; height: number; resized: boolean } {
+  const limits = EDIT_IMAGE_LIMITS[mode];
   const longEdge = Math.max(width, height);
   const megapixels = (width * height) / 1_000_000;
-  const edgeScale = longEdge > EDIT_IMAGE_MAX_LONG_EDGE ? EDIT_IMAGE_MAX_LONG_EDGE / longEdge : 1;
-  const megapixelScale = megapixels > EDIT_IMAGE_MAX_MEGAPIXELS ? Math.sqrt(EDIT_IMAGE_MAX_MEGAPIXELS / megapixels) : 1;
+  const edgeScale = longEdge > limits.maxLongEdge ? limits.maxLongEdge / longEdge : 1;
+  const megapixelScale = megapixels > limits.maxMegapixels ? Math.sqrt(limits.maxMegapixels / megapixels) : 1;
   const scale = Math.min(1, edgeScale, megapixelScale);
 
   return {
@@ -119,18 +130,94 @@ function getHighFidelityEditSize(width: number, height: number): { width: number
   };
 }
 
-function encodeCanvasForGemini(canvas: HTMLCanvasElement, mimeType: string): string {
+function encodeCanvasForGemini(canvas: HTMLCanvasElement, mimeType: string, mode: EditImageQualityMode): string {
   if (mimeType === 'image/png') {
     return canvas.toDataURL(mimeType);
   }
 
+  const limits = EDIT_IMAGE_LIMITS[mode];
   let quality = EDIT_IMAGE_JPEG_QUALITY;
   let dataUrl = canvas.toDataURL(mimeType, quality);
-  while (estimateBase64Bytes(dataUrl.split(',')[1] || '') > EDIT_IMAGE_MAX_INLINE_BYTES && quality > 0.9) {
-    quality = Math.max(0.9, quality - 0.02);
+  while (estimateBase64Bytes(dataUrl.split(',')[1] || '') > limits.maxInlineBytes && quality > 0.86) {
+    quality = Math.max(0.86, quality - 0.02);
     dataUrl = canvas.toDataURL(mimeType, quality);
   }
   return dataUrl;
+}
+
+function encodeCanvasAsJpegWithBackdrop(canvas: HTMLCanvasElement, mode: EditImageQualityMode): string {
+  const flattened = document.createElement('canvas');
+  flattened.width = canvas.width;
+  flattened.height = canvas.height;
+  const ctx = flattened.getContext('2d');
+  if (!ctx) return canvas.toDataURL('image/jpeg', EDIT_IMAGE_JPEG_QUALITY);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, flattened.width, flattened.height);
+  ctx.drawImage(canvas, 0, 0);
+  return encodeCanvasForGemini(flattened, 'image/jpeg', mode);
+}
+
+export async function processImageDataUrl(dataUrl: string, fileName: string, mode: EditImageQualityMode = 'single'): Promise<ImageState> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const inputMimeType = getMimeTypeFromDataUrl(dataUrl, 'image/jpeg');
+      const originalBase64 = dataUrl.split(',')[1] || '';
+      const originalBytes = estimateBase64Bytes(originalBase64);
+      const highFidelitySize = getHighFidelityEditSize(img.width, img.height, mode);
+      const limits = EDIT_IMAGE_LIMITS[mode];
+
+      if (
+        !highFidelitySize.resized &&
+        passthroughMimeTypes.has(inputMimeType) &&
+        originalBytes <= limits.maxInlineBytes
+      ) {
+        resolve({
+          fileName,
+          base64: originalBase64,
+          mimeType: inputMimeType,
+          width: img.width,
+          height: img.height,
+        });
+        return;
+      }
+
+      const canvas = document.createElement('canvas');
+      const { width, height } = highFidelitySize;
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error("Failed to get canvas context."));
+        return;
+      }
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const outputMimeType = inputMimeType === 'image/png'
+        ? 'image/png'
+        : inputMimeType === 'image/webp'
+          ? 'image/webp'
+          : 'image/jpeg';
+      let resizedDataUrl = encodeCanvasForGemini(canvas, outputMimeType, mode);
+      let base64 = resizedDataUrl.split(',')[1] || '';
+      if (estimateBase64Bytes(base64) > limits.maxInlineBytes && outputMimeType !== 'image/jpeg') {
+        resizedDataUrl = encodeCanvasAsJpegWithBackdrop(canvas, mode);
+        base64 = resizedDataUrl.split(',')[1] || '';
+      }
+
+      resolve({
+        fileName,
+        base64,
+        mimeType: getMimeTypeFromDataUrl(resizedDataUrl, outputMimeType),
+        width: Math.round(width),
+        height: Math.round(height),
+      });
+    };
+    img.onerror = () => reject(new Error(`Could not load the image file preview for ${fileName}. It may be corrupt or an unsupported format.`));
+    img.src = dataUrl;
+  });
 }
 
 /**
@@ -140,7 +227,7 @@ function encodeCanvasForGemini(canvas: HTMLCanvasElement, mimeType: string): str
  * @param file The image file to process (e.g., JPG, PNG, WebP).
  * @returns A promise that resolves to an ImageState object.
  */
-export async function processAndResizeImage(file: File): Promise<ImageState> {
+export async function processAndResizeImage(file: File, mode: EditImageQualityMode = 'single'): Promise<ImageState> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -148,63 +235,7 @@ export async function processAndResizeImage(file: File): Promise<ImageState> {
                 if (!e.target?.result) {
                     return reject(new Error("Failed to read file."));
                 }
-                const dataUrl = e.target.result as string;
-                
-                const img = new Image();
-                img.onload = () => {
-                    const inputMimeType = getMimeTypeFromDataUrl(dataUrl, file.type);
-                    const originalBase64 = dataUrl.split(',')[1] || '';
-                    const originalBytes = estimateBase64Bytes(originalBase64);
-                    const highFidelitySize = getHighFidelityEditSize(img.width, img.height);
-
-                    if (
-                        !highFidelitySize.resized &&
-                        passthroughMimeTypes.has(inputMimeType) &&
-                        originalBytes <= EDIT_IMAGE_MAX_INLINE_BYTES
-                    ) {
-                        resolve({
-                            fileName: file.name,
-                            base64: originalBase64,
-                            mimeType: inputMimeType,
-                            width: img.width,
-                            height: img.height,
-                        });
-                        return;
-                    }
-
-                    const canvas = document.createElement('canvas');
-                    const { width, height } = highFidelitySize;
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d');
-                    if (!ctx) {
-                        return reject(new Error("Failed to get canvas context."));
-                    }
-                    ctx.imageSmoothingEnabled = true;
-                    ctx.imageSmoothingQuality = 'high';
-                    ctx.drawImage(img, 0, 0, width, height);
-                    
-                    const outputMimeType = inputMimeType === 'image/png'
-                        ? 'image/png'
-                        : inputMimeType === 'image/webp'
-                          ? 'image/webp'
-                          : 'image/jpeg';
-                    const resizedDataUrl = encodeCanvasForGemini(canvas, outputMimeType);
-                    const base64 = resizedDataUrl.split(',')[1];
-
-                    resolve({
-                        fileName: file.name,
-                        base64: base64,
-                        mimeType: outputMimeType,
-                        width: Math.round(width),
-                        height: Math.round(height),
-                    });
-                };
-                img.onerror = () => {
-                    reject(new Error(`Could not load the image file preview for ${file.name}. It may be corrupt or an unsupported format.`));
-                }
-                
-                img.src = dataUrl;
+                processImageDataUrl(e.target.result as string, file.name, mode).then(resolve).catch(reject);
 
             } catch (error) {
                 reject(error);

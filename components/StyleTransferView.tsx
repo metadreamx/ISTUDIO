@@ -7,7 +7,8 @@ import { ImageUploader } from './ImageUploader';
 import { MainPanel } from './MainPanel';
 import { StyleChecklist } from './StyleChecklist';
 import { analyzeTargetImageDetails, editImage, detectTransferableElements, analyzeClothingImage, analyzeAccessoryImage, analyzeFaceImage, analyzeBackgroundImage, analyzeSkyImage, analyzeReferenceScene } from '../services/geminiService';
-import { getTetherStatus, selectTetherFolder, startTetherSession, stopTetherSession } from '../services/db';
+import { getTetherStatus, saveProjectAsset, selectTetherFolder, startTetherSession, stopTetherSession } from '../services/db';
+import { getImageSrc, hasImageSource, imageToGeminiInput } from '../services/imageAssets';
 import { SparklesIcon, XCircleIcon, CheckIcon, LockIcon, AdjustmentsHorizontalIcon, HistoryIcon, DownloadIcon, ChevronDownIcon } from '@/components/icons';
 
 // Utility function to get dominant color from an image
@@ -59,6 +60,29 @@ const getDominantColor = (base64Image: string, mimeType: string): Promise<string
     };
     img.src = `data:${mimeType};base64,${base64Image}`;
   });
+};
+
+const sourceToInlineData = async (source: string, fallbackMimeType = 'image/png') => {
+  const dataUrl = source.startsWith('data:')
+    ? source
+    : await new Promise<string>(async (resolve, reject) => {
+        try {
+          const response = await fetch(source);
+          if (!response.ok) throw new Error(`Could not load saved image (${response.status}).`);
+          const blob = await response.blob();
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error('Could not read saved image.'));
+          reader.readAsDataURL(blob);
+        } catch (error) {
+          reject(error);
+        }
+      });
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  return {
+    data: match?.[2] || dataUrl.split(',')[1] || '',
+    mimeType: match?.[1] || fallbackMimeType,
+  };
 };
 
 type GenerationStatus = 'idle' | 'analyzing_target' | 'generating' | 'saving';
@@ -183,6 +207,10 @@ const compactHistoryImage = (image: ImageState | undefined, fallbackFileName: st
   fileName: image?.fileName || fallbackFileName,
   base64: null,
   mimeType: image?.mimeType || null,
+  width: image?.width ?? null,
+  height: image?.height ?? null,
+  assetPath: image?.assetPath ?? null,
+  assetUrl: image?.assetUrl ?? null,
 });
 
 const compactHistoryForSave = (history: HistoryItem[], fallbackReference: ImageState): HistoryItem[] =>
@@ -267,7 +295,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     customSkyItem,
   ]);
 
-  const canAutoQueueTether = Boolean(referenceImage.base64 && referenceImage.mimeType && !isAnalyzing && hasReadyGenerationInstructions());
+  const canAutoQueueTether = Boolean(hasImageSource(referenceImage) && referenceImage.mimeType && !isAnalyzing && hasReadyGenerationInstructions());
 
   // Load project state
   useEffect(() => {
@@ -311,7 +339,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
           }));
 
     setReferenceImage(nextReference);
-    lastAnalyzedRefBase64.current = nextReference.base64 || null;
+    lastAnalyzedRefBase64.current = nextReference.assetPath || nextReference.assetUrl || nextReference.base64 || null;
     setTargetImages(restoredTargets);
     setGenerationHistory(fallbackHistory);
     setActiveImageIndex(restoredTargets.length > 0 ? 0 : -1);
@@ -461,23 +489,47 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     }
   }, [buildProjectSnapshot, onUpdateProject]);
 
-  useEffect(() => {
-    if (!referenceTemplate?.base64 || !referenceTemplate.mimeType) return;
+  const persistProjectImage = useCallback(async (
+    image: ImageState,
+    bucket: 'reference' | 'targets' | 'outputs' | 'assets' | 'tether/inbox',
+  ): Promise<ImageState> => {
+    if (!project?.id || !image.base64) {
+      return image;
+    }
+    try {
+      return await saveProjectAsset(project.id, image, bucket);
+    } catch (error) {
+      console.warn(`Could not save ${bucket} image into the project folder.`, error);
+      return image;
+    }
+  }, [project?.id]);
 
-    setReferenceImage(referenceTemplate);
-    setChecklist([]);
-    setSceneBlueprint(null);
-    setAccentColor(null);
-    setOpenCategoryId(null);
-    lastAnalyzedRefBase64.current = null;
-    saveProjectNow({
-      referenceImage: referenceTemplate,
-      checklist: [],
-      sceneBlueprint: null,
-      accentColor: null,
-    });
-    onReferenceTemplateConsumed?.();
-  }, [referenceTemplate, referenceTemplate?.base64, referenceTemplate?.mimeType, onReferenceTemplateConsumed, saveProjectNow]);
+  useEffect(() => {
+    if (!hasImageSource(referenceTemplate) || !referenceTemplate?.mimeType) return;
+
+    let isCancelled = false;
+    const applyTemplate = async () => {
+      const storedReference = await persistProjectImage(referenceTemplate, 'reference');
+      if (isCancelled) return;
+      setReferenceImage(storedReference);
+      setChecklist([]);
+      setSceneBlueprint(null);
+      setAccentColor(null);
+      setOpenCategoryId(null);
+      lastAnalyzedRefBase64.current = null;
+      saveProjectNow({
+        referenceImage: storedReference,
+        checklist: [],
+        sceneBlueprint: null,
+        accentColor: null,
+      });
+      onReferenceTemplateConsumed?.();
+    };
+    applyTemplate();
+    return () => {
+      isCancelled = true;
+    };
+  }, [referenceTemplate, referenceTemplate?.assetPath, referenceTemplate?.assetUrl, referenceTemplate?.base64, referenceTemplate?.mimeType, onReferenceTemplateConsumed, persistProjectImage, saveProjectNow]);
 
   // Persist project state
   useEffect(() => {
@@ -490,44 +542,48 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     return () => clearTimeout(timer);
   }, [buildProjectSnapshot, onUpdateProject]);
 
-  const handleReferenceImageSelect = useCallback((nextReferenceImage: ImageState) => {
+  const handleReferenceImageSelect = useCallback(async (nextReferenceImage: ImageState) => {
+    const storedReferenceImage = await persistProjectImage(nextReferenceImage, 'reference');
     const resetChecklist: StyleCategory[] = [];
-    setReferenceImage(nextReferenceImage);
+    setReferenceImage(storedReferenceImage);
     setChecklist(resetChecklist);
     setSceneBlueprint(null);
     setAccentColor(null);
     setOpenCategoryId(null);
     lastAnalyzedRefBase64.current = null;
     saveProjectNow({
-      referenceImage: nextReferenceImage,
+      referenceImage: storedReferenceImage,
       checklist: resetChecklist,
       sceneBlueprint: null,
       accentColor: null,
     });
-  }, [saveProjectNow]);
+  }, [persistProjectImage, saveProjectNow]);
 
   const handleTargetImagesSelect = useCallback(async (imageStates: ImageState[]) => {
     const newBatchImages: BatchImage[] = await Promise.all(imageStates.map(async (state, index) => {
         const dominantColor = state.base64 && state.mimeType
             ? await getDominantColor(state.base64, state.mimeType)
             : null;
+        const storedTarget = await persistProjectImage(state, 'targets');
         return {
             id: `${state.fileName!}-${Date.now()}-${index}`,
-            target: state,
+            target: storedTarget,
             generated: null,
             status: 'pending' as const,
             dominantColor: dominantColor,
         };
     }));
 
-    const updatedImages = [...targetImages, ...newBatchImages];
-    setTargetImages(updatedImages);
-    if (targetImages.length === 0 && updatedImages.length > 0) {
-      setActiveImageIndex(0);
-    }
-    saveProjectNow({ targetImages: updatedImages });
+    setTargetImages(prev => {
+      const updatedImages = [...prev, ...newBatchImages];
+      if (prev.length === 0 && updatedImages.length > 0) {
+        setActiveImageIndex(0);
+      }
+      saveProjectNow({ targetImages: updatedImages });
+      return updatedImages;
+    });
 
-  }, [saveProjectNow, targetImages]);
+  }, [persistProjectImage, saveProjectNow]);
 
   const buildTetherState = useCallback((overrides: Partial<TetherProjectState> = {}): TetherProjectState => ({
     folderPath: (overrides.folderPath ?? tetherFolderPath) || undefined,
@@ -704,7 +760,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       .filter((capture) =>
         capture.projectId === project.id &&
         capture.status === 'imported' &&
-        capture.image?.base64 &&
+        hasImageSource(capture.image) &&
         capture.image.mimeType &&
         !importedTetherCaptureIdsRef.current.has(capture.id),
       )
@@ -716,17 +772,21 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     const ingest = async () => {
       const newBatchImages: BatchImage[] = await Promise.all(newCaptures.map(async (capture) => {
         const image = capture.image!;
-        const dominantColor = image.base64 && image.mimeType
-          ? await getDominantColor(image.base64, image.mimeType).catch(() => null)
+        const dominantColor = image.mimeType
+          ? await imageToGeminiInput(image, 'batch')
+              .then((input) => input.base64 && input.mimeType ? getDominantColor(input.base64, input.mimeType) : null)
+              .catch(() => null)
           : null;
         return {
           id: `tether-${capture.id}`,
           target: {
             fileName: image.fileName || capture.fileName,
-            base64: image.base64,
+            base64: null,
             mimeType: image.mimeType,
             width: image.width ?? null,
             height: image.height ?? null,
+            assetPath: image.assetPath ?? null,
+            assetUrl: image.assetUrl ?? null,
           },
           generated: null,
           status: (tetherAutoEdit && canAutoQueueTether ? 'queued' : 'pending') as BatchImage['status'],
@@ -789,10 +849,10 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     let isCancelled = false;
 
     const processReferenceImage = async () => {
-      const { base64, mimeType } = referenceImage;
-      if (base64 && mimeType) {
+      const referenceKey = referenceImage.assetPath || referenceImage.assetUrl || referenceImage.base64 || null;
+      if (referenceKey && referenceImage.mimeType && hasImageSource(referenceImage)) {
         // Skip analysis if we already have a checklist for this image (e.g. on project load, or replaying the same reference)
-        if (checklist.length > 0 && sceneBlueprint && referenceImage.base64 === lastAnalyzedRefBase64.current) {
+        if (checklist.length > 0 && sceneBlueprint && referenceKey === lastAnalyzedRefBase64.current) {
             return;
         }
 
@@ -803,10 +863,14 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         setOpenCategoryId(null);
         
         try {
+          const analysisImage = await imageToGeminiInput(referenceImage, 'single');
+          if (!analysisImage.base64 || !analysisImage.mimeType) {
+            throw new Error('Could not load the reference image from the project folder.');
+          }
           const [itemsResult, colorResult, blueprintResult] = await Promise.allSettled([
-            withReferenceAnalysisTimeout(detectTransferableElements(base64), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Visual DNA analysis'),
-            withReferenceAnalysisTimeout(getDominantColor(base64, mimeType), COLOR_ANALYSIS_TIMEOUT_MS, 'Color analysis'),
-            withReferenceAnalysisTimeout(analyzeReferenceScene(base64), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Scene blueprint analysis')
+            withReferenceAnalysisTimeout(detectTransferableElements(analysisImage.base64), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Visual DNA analysis'),
+            withReferenceAnalysisTimeout(getDominantColor(analysisImage.base64, analysisImage.mimeType), COLOR_ANALYSIS_TIMEOUT_MS, 'Color analysis'),
+            withReferenceAnalysisTimeout(analyzeReferenceScene(analysisImage.base64), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Scene blueprint analysis')
           ]);
           
           if (isCancelled) return;
@@ -827,7 +891,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
           setAccentColor(color);
           setSceneBlueprint(blueprint);
           setSessionSeed(Math.floor(Math.random() * 1000000));
-          lastAnalyzedRefBase64.current = base64; // Track successful analysis
+          lastAnalyzedRefBase64.current = referenceKey; // Track successful analysis
           if (itemsWithIntensity.length > 0) {
             setOpenCategoryId(itemsWithIntensity[0].id);
           }
@@ -845,7 +909,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
           setChecklist(fallbackItems);
           setSceneBlueprint(createFallbackReferenceBlueprint());
           setOpenCategoryId(fallbackItems[0]?.id || null);
-          lastAnalyzedRefBase64.current = base64;
+          lastAnalyzedRefBase64.current = referenceKey;
           setError(e instanceof Error ? e.message : "Failed to process reference image. ISTUDIO loaded starter DNA controls instead.");
           setAccentColor(null);
           setSessionSeed(null);
@@ -868,7 +932,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     return () => {
       isCancelled = true;
     };
-  }, [referenceImage.base64, referenceImage.mimeType]);
+  }, [referenceImage.assetPath, referenceImage.assetUrl, referenceImage.base64, referenceImage.mimeType]);
 
   const handleCheckChange = useCallback((categoryId: string, subItemId: string, checked: boolean) => {
     setChecklist(prev => prev.map(c => c.id === categoryId ? { ...c, items: c.items.map(i => i.id === subItemId ? { ...i, checked } : i) } : c));
@@ -915,18 +979,34 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     } : c));
   }, []);
 
+  const prepareCustomAsset = useCallback(async (
+    imageState: ImageState,
+    analyzer: (base64: string) => Promise<string>,
+  ): Promise<{ storedImage: ImageState; analysis: string }> => {
+    const analysisInput = await imageToGeminiInput(imageState, 'single');
+    if (!analysisInput.base64) {
+      throw new Error('Could not prepare the custom asset for analysis.');
+    }
+    const [storedImage, analysis] = await Promise.all([
+      persistProjectImage(imageState, 'assets'),
+      analyzer(analysisInput.base64),
+    ]);
+    return { storedImage, analysis };
+  }, [persistProjectImage]);
+
   const handleCustomClothingUpload = useCallback(async (gender: 'man' | 'woman', id: string, imageState: ImageState) => {
-    const nextItems = { ...customClothingItems, [gender]: customClothingItems[gender].map(item => item.id === id ? { ...item, image: imageState, status: 'analyzing' as const } : item) };
-    setCustomClothingItems(nextItems);
-    saveProjectNow({ customClothingItems: nextItems });
+    const analyzingItems = { ...customClothingItems, [gender]: customClothingItems[gender].map(item => item.id === id ? { ...item, image: imageState, status: 'analyzing' as const } : item) };
+    setCustomClothingItems(analyzingItems);
     try {
-      const analysis = await analyzeClothingImage(imageState.base64!);
-      setCustomClothingItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, analysis, status: 'ready' } : item) }));
+      const { storedImage, analysis } = await prepareCustomAsset(imageState, analyzeClothingImage);
+      const nextItems = { ...customClothingItems, [gender]: customClothingItems[gender].map(item => item.id === id ? { ...item, image: storedImage, analysis, enabled: true, status: 'ready' as const } : item) };
+      setCustomClothingItems(nextItems);
+      saveProjectNow({ customClothingItems: nextItems });
     } catch (e) {
       console.error("Clothing analysis failed:", e);
       setCustomClothingItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, status: 'error' } : item) }));
     }
-  }, [customClothingItems, saveProjectNow]);
+  }, [customClothingItems, prepareCustomAsset, saveProjectNow]);
 
   const handleCustomClothingToggle = useCallback((gender: 'man' | 'woman', id: string, enabled: boolean) => {
     setCustomClothingItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, enabled } : item) }));
@@ -937,17 +1017,18 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, []);
   
   const handleCustomAccessoryUpload = useCallback(async (gender: 'man' | 'woman', id: string, imageState: ImageState) => {
-    const nextItems = { ...customAccessoryItems, [gender]: customAccessoryItems[gender].map(item => item.id === id ? { ...item, image: imageState, status: 'analyzing' as const } : item) };
-    setCustomAccessoryItems(nextItems);
-    saveProjectNow({ customAccessoryItems: nextItems });
+    const analyzingItems = { ...customAccessoryItems, [gender]: customAccessoryItems[gender].map(item => item.id === id ? { ...item, image: imageState, status: 'analyzing' as const } : item) };
+    setCustomAccessoryItems(analyzingItems);
     try {
-      const analysis = await analyzeAccessoryImage(imageState.base64!);
-      setCustomAccessoryItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, analysis, status: 'ready' } : item) }));
+      const { storedImage, analysis } = await prepareCustomAsset(imageState, analyzeAccessoryImage);
+      const nextItems = { ...customAccessoryItems, [gender]: customAccessoryItems[gender].map(item => item.id === id ? { ...item, image: storedImage, analysis, enabled: true, status: 'ready' as const } : item) };
+      setCustomAccessoryItems(nextItems);
+      saveProjectNow({ customAccessoryItems: nextItems });
     } catch (e) {
       console.error("Accessory analysis failed:", e);
       setCustomAccessoryItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, status: 'error' } : item) }));
     }
-  }, [customAccessoryItems, saveProjectNow]);
+  }, [customAccessoryItems, prepareCustomAsset, saveProjectNow]);
 
   const handleCustomAccessoryToggle = useCallback((gender: 'man' | 'woman', id: string, enabled: boolean) => {
     setCustomAccessoryItems(prev => ({ ...prev, [gender]: prev[gender].map(item => item.id === id ? { ...item, enabled } : item) }));
@@ -958,17 +1039,18 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, []);
   
   const handleCustomFaceUpload = useCallback(async (gender: 'man' | 'woman', imageState: ImageState) => {
-    const nextItems = { ...customFaceItems, [gender]: { ...customFaceItems[gender], image: imageState, status: 'analyzing' as const } };
-    setCustomFaceItems(nextItems);
-    saveProjectNow({ customFaceItems: nextItems });
+    const analyzingItems = { ...customFaceItems, [gender]: { ...customFaceItems[gender], image: imageState, status: 'analyzing' as const } };
+    setCustomFaceItems(analyzingItems);
     try {
-      const analysis = await analyzeFaceImage(imageState.base64!);
-      setCustomFaceItems(prev => ({ ...prev, [gender]: { ...prev[gender], analysis, status: 'ready' } }));
+      const { storedImage, analysis } = await prepareCustomAsset(imageState, analyzeFaceImage);
+      const nextItems = { ...customFaceItems, [gender]: { ...customFaceItems[gender], image: storedImage, analysis, enabled: true, status: 'ready' as const } };
+      setCustomFaceItems(nextItems);
+      saveProjectNow({ customFaceItems: nextItems });
     } catch (e) {
       console.error("Face analysis failed:", e);
       setCustomFaceItems(prev => ({ ...prev, [gender]: { ...prev[gender], status: 'error' } }));
     }
-  }, [customFaceItems, saveProjectNow]);
+  }, [customFaceItems, prepareCustomAsset, saveProjectNow]);
 
   const handleCustomFaceToggle = useCallback((gender: 'man' | 'woman', enabled: boolean) => {
     setCustomFaceItems(prev => ({ ...prev, [gender]: { ...prev[gender], enabled } }));
@@ -979,17 +1061,18 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, []);
   
   const handleCustomBackgroundUpload = useCallback(async (imageState: ImageState) => {
-    const nextItem = { ...customBackgroundItem, image: imageState, status: 'analyzing' as const };
-    setCustomBackgroundItem(nextItem);
-    saveProjectNow({ customBackgroundItem: nextItem });
+    const analyzingItem = { ...customBackgroundItem, image: imageState, status: 'analyzing' as const };
+    setCustomBackgroundItem(analyzingItem);
     try {
-      const analysis = await analyzeBackgroundImage(imageState.base64!);
-      setCustomBackgroundItem(prev => ({ ...prev, analysis, status: 'ready' }));
+      const { storedImage, analysis } = await prepareCustomAsset(imageState, analyzeBackgroundImage);
+      const nextItem = { ...customBackgroundItem, image: storedImage, analysis, enabled: true, status: 'ready' as const };
+      setCustomBackgroundItem(nextItem);
+      saveProjectNow({ customBackgroundItem: nextItem });
     } catch (e) {
       console.error("Background analysis failed:", e);
       setCustomBackgroundItem(prev => ({ ...prev, status: 'error' }));
     }
-  }, [customBackgroundItem, saveProjectNow]);
+  }, [customBackgroundItem, prepareCustomAsset, saveProjectNow]);
 
   const handleCustomBackgroundToggle = useCallback((enabled: boolean) => {
     setCustomBackgroundItem(prev => ({ ...prev, enabled }));
@@ -1000,17 +1083,18 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, []);
 
   const handleCustomSkyUpload = useCallback(async (imageState: ImageState) => {
-    const nextItem = { ...customSkyItem, image: imageState, status: 'analyzing' as const };
-    setCustomSkyItem(nextItem);
-    saveProjectNow({ customSkyItem: nextItem });
+    const analyzingItem = { ...customSkyItem, image: imageState, status: 'analyzing' as const };
+    setCustomSkyItem(analyzingItem);
     try {
-      const analysis = await analyzeSkyImage(imageState.base64!);
-      setCustomSkyItem(prev => ({ ...prev, analysis, status: 'ready' }));
+      const { storedImage, analysis } = await prepareCustomAsset(imageState, analyzeSkyImage);
+      const nextItem = { ...customSkyItem, image: storedImage, analysis, enabled: true, status: 'ready' as const };
+      setCustomSkyItem(nextItem);
+      saveProjectNow({ customSkyItem: nextItem });
     } catch (e) {
       console.error("Sky analysis failed:", e);
       setCustomSkyItem(prev => ({ ...prev, status: 'error' }));
     }
-  }, [customSkyItem, saveProjectNow]);
+  }, [customSkyItem, prepareCustomAsset, saveProjectNow]);
 
   const handleCustomSkyToggle = useCallback((enabled: boolean) => {
     setCustomSkyItem(prev => ({ ...prev, enabled }));
@@ -1025,21 +1109,21 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
     (['woman', 'man'] as const).forEach((gender) => {
       customClothingItems[gender]
-        .filter((item) => item.enabled && item.status === 'ready' && item.image.base64)
+        .filter((item) => item.enabled && item.status === 'ready' && hasImageSource(item.image))
         .forEach((item, index) => customAssets.push(`${gender} clothing ${index + 1}: ${item.image.fileName || 'custom image'}`));
       customAccessoryItems[gender]
-        .filter((item) => item.enabled && item.status === 'ready' && item.image.base64)
+        .filter((item) => item.enabled && item.status === 'ready' && hasImageSource(item.image))
         .forEach((item, index) => customAssets.push(`${gender} accessory ${index + 1}: ${item.image.fileName || 'custom image'}`));
       const faceItem = customFaceItems[gender];
-      if (faceItem.enabled && faceItem.status === 'ready' && faceItem.image.base64) {
+      if (faceItem.enabled && faceItem.status === 'ready' && hasImageSource(faceItem.image)) {
         customAssets.push(`${gender} face: ${faceItem.image.fileName || 'custom image'}`);
       }
     });
 
-    if (customBackgroundItem.enabled && customBackgroundItem.status === 'ready' && customBackgroundItem.image.base64) {
+    if (customBackgroundItem.enabled && customBackgroundItem.status === 'ready' && hasImageSource(customBackgroundItem.image)) {
       customAssets.push(`background: ${customBackgroundItem.image.fileName || 'custom image'}`);
     }
-    if (customSkyItem.enabled && customSkyItem.status === 'ready' && customSkyItem.image.base64) {
+    if (customSkyItem.enabled && customSkyItem.status === 'ready' && hasImageSource(customSkyItem.image)) {
       customAssets.push(`sky: ${customSkyItem.image.fileName || 'custom image'}`);
     }
 
@@ -1110,7 +1194,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
   const runGeneration = useCallback(async (imageIndex: number) => {
     const imageToProcess = targetImages[imageIndex];
-    if (!imageToProcess || !referenceImage.base64 || !referenceImage.mimeType) {
+    if (!imageToProcess || !hasImageSource(imageToProcess.target) || !hasImageSource(referenceImage) || !referenceImage.mimeType) {
         return; 
     }
     
@@ -1118,8 +1202,15 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     setTargetImages(prev => prev.map((img, idx) => idx === imageIndex ? { ...img, status: 'processing' } : img));
 
     try {
+        const queuedOrBatchCount = targetImages.filter(img => img.status === 'queued' || img.status === 'processing').length;
+        const qualityMode = queuedOrBatchCount > 1 || targetImages.length > 1 ? 'batch' : 'single';
+        const targetInput = await imageToGeminiInput(imageToProcess.target, qualityMode);
+        if (!targetInput.base64 || !targetInput.mimeType) {
+          throw new Error('Could not load the project images for generation.');
+        }
+
         setGenerationStatus('analyzing_target');
-        const targetImageAnalysis = await analyzeTargetImageDetails(imageToProcess.target.base64!);
+        const targetImageAnalysis = await analyzeTargetImageDetails(targetInput.base64);
         if (cancelGenerationRef.current) throw new Error("Cancelled");
         
         setGenerationStatus('generating');
@@ -1242,7 +1333,7 @@ ${textInstructions}
             items: (CustomClothingItem | CustomAccessoryItem | CustomFaceItem)[],
             type: 'CLOTHING' | 'ACCESSORY' | 'FACE'
         ) => {
-            const activeItems = items.filter(item => item && item.enabled && item.status === 'ready' && item.image.base64);
+            const activeItems = items.filter(item => item && item.enabled && item.status === 'ready' && hasImageSource(item.image));
             if (activeItems.length === 0) return null;
           
             const itemDescriptions = activeItems.map((item, index) => `- ${type === 'FACE' ? 'Face' : type.charAt(0) + type.slice(1).toLowerCase()} Item ${index + 1}: ${item!.analysis}`).join('\n');
@@ -1279,11 +1370,11 @@ ${itemDescriptions}
             if (accessoryPrompt) specialInstructionParts.push(accessoryPrompt);
 
             const faceItem = customFaceItems[gender];
-            const facePrompt = processCustomItemsForPrompt(gender, faceItem.image.base64 ? [faceItem] : [], 'FACE');
+            const facePrompt = processCustomItemsForPrompt(gender, hasImageSource(faceItem.image) ? [faceItem] : [], 'FACE');
             if (facePrompt) specialInstructionParts.push(facePrompt);
         });
 
-        if (customBackgroundItem.enabled && customBackgroundItem.status === 'ready' && customBackgroundItem.image.base64) {
+        if (customBackgroundItem.enabled && customBackgroundItem.status === 'ready' && hasImageSource(customBackgroundItem.image)) {
             const backgroundDescription = customBackgroundItem.analysis;
             specialInstructionParts.push(`---
 **CRITICAL OVERRIDE: BACKGROUND REPLACEMENT & UNIFIED SCENE MANDATE**
@@ -1309,7 +1400,7 @@ This is your highest-priority, non-negotiable directive. It **OVERRIDES** all ot
 ---`);
         }
 
-        if (customSkyItem.enabled && customSkyItem.status === 'ready' && customSkyItem.image.base64) {
+        if (customSkyItem.enabled && customSkyItem.status === 'ready' && hasImageSource(customSkyItem.image)) {
             const skyDescription = customSkyItem.analysis;
             specialInstructionParts.push(`---
 **CRITICAL OVERRIDE: SKY REPLACEMENT**
@@ -1434,38 +1525,55 @@ Before outputting, verify:
             ...customClothingItems.woman, ...customClothingItems.man,
             ...customAccessoryItems.woman, ...customAccessoryItems.man,
             customFaceItems.woman, customFaceItems.man
-        ].filter(item => item.enabled && item.status === 'ready' && item.image.base64);
+        ].filter(item => item.enabled && item.status === 'ready' && hasImageSource(item.image));
 
         const imageParts = [
-            { inlineData: { data: imageToProcess.target.base64!, mimeType: imageToProcess.target.mimeType! }}
+            { inlineData: { data: targetInput.base64, mimeType: targetInput.mimeType }}
         ];
 
         if (isStatefulIteration && anchorScene?.generated) {
-            const base64Data = anchorScene.generated.split(',')[1];
+            const anchorInline = await sourceToInlineData(anchorScene.generated, 'image/png');
             imageParts.push({
-                inlineData: { data: base64Data, mimeType: 'image/png' }
+                inlineData: anchorInline
             });
         }
 
-        imageParts.push(...activeItems.map(item => ({ inlineData: { data: item.image.base64!, mimeType: item.image.mimeType! }})));
+        const activeItemInputs = await Promise.all(activeItems.map(item => imageToGeminiInput(item.image, qualityMode)));
+        imageParts.push(...activeItemInputs
+          .filter(item => item.base64 && item.mimeType)
+          .map(item => ({ inlineData: { data: item.base64!, mimeType: item.mimeType! } })));
 
-        if (customBackgroundItem.enabled && customBackgroundItem.status === 'ready' && customBackgroundItem.image.base64) {
+        if (customBackgroundItem.enabled && customBackgroundItem.status === 'ready' && hasImageSource(customBackgroundItem.image)) {
+            const backgroundInput = await imageToGeminiInput(customBackgroundItem.image, qualityMode);
+            if (backgroundInput.base64 && backgroundInput.mimeType) {
             imageParts.push({
-                inlineData: { data: customBackgroundItem.image.base64, mimeType: customBackgroundItem.image.mimeType! }
+                inlineData: { data: backgroundInput.base64, mimeType: backgroundInput.mimeType }
             });
+            }
         }
 
-        if (customSkyItem.enabled && customSkyItem.status === 'ready' && customSkyItem.image.base64) {
+        if (customSkyItem.enabled && customSkyItem.status === 'ready' && hasImageSource(customSkyItem.image)) {
+            const skyInput = await imageToGeminiInput(customSkyItem.image, qualityMode);
+            if (skyInput.base64 && skyInput.mimeType) {
             imageParts.push({
-                inlineData: { data: customSkyItem.image.base64, mimeType: customSkyItem.image.mimeType! }
+                inlineData: { data: skyInput.base64, mimeType: skyInput.mimeType }
             });
+            }
         }
 
         const seed = (isStatefulIteration && sessionSeed) ? sessionSeed : Math.floor(Math.random() * 1000000);
         const newImageBase64 = await editImage(imageParts, prompt, aspectRatio, seed);
         if (cancelGenerationRef.current) throw new Error("Cancelled");
 
-        const newImageSrc = `data:image/png;base64,${newImageBase64}`;
+        const outputFileName = `${(imageToProcess.target.fileName || 'istudio-output').replace(/\.[^/.]+$/, '')}-reference-edit.png`;
+        const storedOutput = await persistProjectImage({
+          fileName: outputFileName,
+          base64: newImageBase64,
+          mimeType: 'image/png',
+          width: null,
+          height: null,
+        }, 'outputs');
+        const newImageSrc = storedOutput.assetUrl || `data:image/png;base64,${newImageBase64}`;
 
         const generationId = Date.now();
         const settingsSnapshot = getGenerationSettingsSnapshot();
@@ -1473,16 +1581,8 @@ Before outputting, verify:
           id: generationId,
           projectId: project?.id || 'live-session',
           generated: newImageSrc,
-          target: {
-            fileName: imageToProcess.target.fileName,
-            base64: imageToProcess.target.base64,
-            mimeType: imageToProcess.target.mimeType,
-          },
-          reference: {
-            fileName: referenceImage.fileName,
-            base64: referenceImage.base64,
-            mimeType: referenceImage.mimeType,
-          },
+          target: compactHistoryImage(imageToProcess.target, imageToProcess.target.fileName),
+          reference: compactHistoryImage(referenceImage, referenceImage.fileName),
           targetId: imageToProcess.id,
           targetFileName: imageToProcess.target.fileName,
           settings: settingsSnapshot,
@@ -1549,7 +1649,7 @@ Before outputting, verify:
       setError("Please upload and select a target image.");
       return;
     }
-    if (!referenceImage.base64 || !referenceImage.mimeType) {
+    if (!hasImageSource(referenceImage) || !referenceImage.mimeType) {
       setError("Upload a reference photo to define the visual DNA.");
       return;
     }
@@ -1572,7 +1672,7 @@ Before outputting, verify:
   }, [activeImageIndex, targetImages, referenceImage, checklist, customClothingItems, customAccessoryItems, customFaceItems, customBackgroundItem, customSkyItem]);
 
   const handleQueueSelected = useCallback(() => {
-    if (!referenceImage.base64 || !referenceImage.mimeType) {
+    if (!hasImageSource(referenceImage) || !referenceImage.mimeType) {
         setError("Upload a reference photo to define the visual DNA.");
         return;
     }
@@ -1602,7 +1702,7 @@ Before outputting, verify:
   }, [targetImages, referenceImage, checklist, customClothingItems, customAccessoryItems, customFaceItems, customBackgroundItem, customSkyItem, selectedImageIds]);
 
   const handleQueueAll = useCallback(() => {
-    if (!referenceImage.base64 || !referenceImage.mimeType) {
+    if (!hasImageSource(referenceImage) || !referenceImage.mimeType) {
         setError("Upload a reference photo to define the visual DNA.");
         return;
     }
@@ -1669,7 +1769,7 @@ Before outputting, verify:
     customFaceItems.man, customFaceItems.woman
   ].some(item => item.enabled) || customBackgroundItem.enabled || customSkyItem.enabled;
 
-  const isActionable = !isAnalyzing && !!activeTarget && !['queued', 'processing'].includes(activeTarget.status) && !!referenceImage.base64 && (checklist.length > 0 || hasActiveCustomItems);
+  const isActionable = !isAnalyzing && !!activeTarget && !['queued', 'processing'].includes(activeTarget.status) && hasImageSource(referenceImage) && (checklist.length > 0 || hasActiveCustomItems);
 
   const getGenerateButtonText = () => {
     if (activeTarget?.status === 'queued') {
@@ -1797,7 +1897,7 @@ Before outputting, verify:
                 <SparklesIcon className="w-3 h-3 text-[var(--color-accent)]" />
                 DNA Reference
               </h2>
-              {referenceImage.base64 && (
+              {hasImageSource(referenceImage) && (
                 <button 
                   onClick={() => handleReferenceImageSelect({ fileName: null, base64: null, mimeType: null })}
                   className="text-xs font-semibold text-red-400/80 transition-colors hover:text-red-300"
@@ -2015,9 +2115,7 @@ Before outputting, verify:
                       <div className="max-h-52 space-y-2 overflow-y-auto pr-1 custom-scrollbar">
                         {tetherCapturesForProject.map((capture) => {
                           const display = getTetherCaptureDisplay(capture);
-                          const previewSrc = capture.image?.base64 && capture.image.mimeType
-                            ? `data:${capture.image.mimeType};base64,${capture.image.base64}`
-                            : null;
+                          const previewSrc = getImageSrc(capture.image);
                           return (
                             <div key={capture.id} className="grid grid-cols-[40px_1fr_auto] gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
                               <div className="h-10 w-10 overflow-hidden rounded-lg border border-[var(--color-border)] bg-black/30">
