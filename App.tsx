@@ -1,8 +1,8 @@
 
 import React, { Suspense, lazy, useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence, MotionConfig } from 'motion/react';
-import type { AppView, ImageState, ImageTransferState, Project, ReferenceTemplate } from './types';
-import { getProject, getProjects, saveProject, deleteProject as dbDeleteProject, getProjectStorageInfo, openProjectsFolder, type ProjectStorageInfo } from './services/db';
+import type { AppView, ImageState, ImageTransferState, Project, ProjectStorageMode, ReferenceTemplate } from './types';
+import { exportProjectBackup, getProject, getProjects, importProjectBackup, saveProject, deleteProject as dbDeleteProject, getProjectStorageInfo, openProjectsFolder, type ProjectStorageInfo } from './services/db';
 import { Logo, SpinnerIcon } from '@/components/icons';
 import { Tooltip } from '@/components/Tooltip';
 import { ApiKeyModal } from '@/components/ApiKeyModal';
@@ -124,6 +124,17 @@ const getProjectGenerationCount = (projectList: Project[]): number => {
   }, 0);
 };
 
+const downloadBlob = (blob: Blob, fileName: string) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
 const InfoPanel: React.FC<{
   isOpen: boolean;
   onClose: () => void;
@@ -182,7 +193,9 @@ const InfoPanel: React.FC<{
         <div className="mt-5 flex items-start gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4">
           <CheckCircle2Icon className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
           <p className="text-sm leading-6 text-[var(--color-text-muted)]">
-            ISTUDIO stores reference DNA, target photos, generated edits, and outputs as editable files in the local projects folder.
+            {storageInfo?.mode === 'browser'
+              ? 'ISTUDIO stores reference DNA, target photos, generated edits, and outputs in this browser. Export project backups before clearing Safari data or switching devices.'
+              : 'ISTUDIO stores reference DNA, target photos, generated edits, and outputs as editable files in the local projects folder.'}
           </p>
           {storageInfo && (
             <p className="mt-2 break-all text-xs leading-5 text-[var(--color-text-muted)]">
@@ -207,6 +220,7 @@ const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(false);
   const [projectStorageInfo, setProjectStorageInfo] = useState<ProjectStorageInfo | null>(null);
   const [pendingReferenceTemplate, setPendingReferenceTemplate] = useState<ImageState | null>(null);
+  const storageMode: ProjectStorageMode = projectStorageInfo?.mode || 'folder';
 
   // Shared State for Inter-View Communication
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -237,8 +251,7 @@ const App: React.FC = () => {
         const hasKey = await window.aistudio.hasSelectedApiKey();
         setHasApiKey(hasKey);
       } else {
-        // Fallback for local development or if window.aistudio is not available
-        setHasApiKey(true);
+        setHasApiKey(Boolean(localStorage.getItem('user_api_key') || process.env.GEMINI_API_KEY));
       }
     };
     checkApiKey();
@@ -248,6 +261,8 @@ const App: React.FC = () => {
     if (window.aistudio) {
       await window.aistudio.openSelectKey();
       setHasApiKey(true);
+    } else {
+      setIsApiKeyModalOpen(true);
     }
   };
 
@@ -262,6 +277,8 @@ const App: React.FC = () => {
         setProjectStorageInfo(storageInfo);
         if (!storageInfo) {
           setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH.bat.");
+        } else if (storageInfo.mode === 'browser') {
+          setToast("iPhone PWA mode: projects save in browser storage. Export backups to move them.");
         }
       } catch (e) {
         console.error("Failed to load project folder data", e);
@@ -380,11 +397,42 @@ const App: React.FC = () => {
   }, []);
 
   const handleOpenProjectsFolder = useCallback(async () => {
+    if (projectStorageInfo?.mode === 'browser') {
+      setToast("On iPhone, use Export Backup to move projects.");
+      return;
+    }
     try {
       await openProjectsFolder();
     } catch (err) {
       console.error("Failed to open projects folder", err);
       setToast("Could not open projects folder");
+    }
+  }, [projectStorageInfo?.mode]);
+
+  const handleExportProject = useCallback(async (project: Project) => {
+    try {
+      const blob = await exportProjectBackup(project.id);
+      const safeName = project.name.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-').replace(/\s+/g, '-').slice(0, 80) || 'ISTUDIO-project';
+      downloadBlob(blob, `${safeName}.istudio.zip`);
+      setToast('Project backup exported');
+    } catch (error) {
+      console.error('Failed to export project backup', error);
+      setToast(error instanceof Error ? error.message : 'Could not export project backup');
+    }
+  }, []);
+
+  const handleImportProject = useCallback(async (file: File) => {
+    try {
+      const importedProject = await importProjectBackup(file);
+      const updatedProjects = await getProjects();
+      setProjects(updatedProjects);
+      setCurrentProject(importedProject);
+      setActiveView('style-transfer');
+      setProjectStorageInfo(await getProjectStorageInfo());
+      setToast('Project backup imported');
+    } catch (error) {
+      console.error('Failed to import project backup', error);
+      setToast(error instanceof Error ? error.message : 'Could not import project backup');
     }
   }, []);
 
@@ -491,6 +539,8 @@ const App: React.FC = () => {
               onOpenProjectsFolder={handleOpenProjectsFolder}
               canCreateProjects={Boolean(projectStorageInfo)}
               onSelectReferenceTemplate={handleSelectReferenceTemplate}
+              onExportProject={handleExportProject}
+              onImportProject={handleImportProject}
             />
           )}
           {activeView === 'style-transfer' && (hasApiKey ? (
@@ -500,6 +550,7 @@ const App: React.FC = () => {
               onCreateProject={(name, initialState) => createProject(name, 'style-transfer', initialState)}
               referenceTemplate={pendingReferenceTemplate}
               onReferenceTemplateConsumed={() => setPendingReferenceTemplate(null)}
+              storageMode={storageMode}
             />
           ) : renderApiKeyRequired())}
           {activeView === 'virtual-set' && (
@@ -532,7 +583,7 @@ const App: React.FC = () => {
         <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar">
           <NavButton view="dashboard" label="Explore" icon={<LayoutDashboardIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
           <NavButton view="style-transfer" label="Reference Edit" icon={<PaletteIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} badge="Pro" />
-          <NavButton view="virtual-set" label="Virtual Set" icon={<BoxIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
+          <NavButton view="virtual-set" label="Virtual Set" icon={<BoxIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} badge={storageMode === 'browser' ? 'iPad' : undefined} />
         </nav>
 
         <div className="flex shrink-0 items-center gap-2">

@@ -12,6 +12,32 @@ ISTUDIO is a Windows-first creative app for reference-based photo editing. Use o
 - **Tethered Mode**: watch a camera capture folder and import new photos into a Reference Edit project automatically.
 - **Local projects**: save references, targets, generations, virtual sets, tethered captures, exports, and settings in project folders on your computer.
 - **Automatic updates**: the launcher checks GitHub Releases every time ISTUDIO starts.
+- **iPhone PWA mode**: open ISTUDIO in Safari, add it to the Home Screen, and use browser-backed project storage with ZIP backup/export.
+
+## Use On iPhone
+
+The easiest iPhone version is the ISTUDIO PWA:
+
+[Open ISTUDIO PWA](https://metadreamx.github.io/ISTUDIO/)
+
+Then:
+
+1. Open the link in Safari.
+2. Tap **Share**.
+3. Tap **Add to Home Screen**.
+4. Open ISTUDIO from the new Home Screen icon.
+5. Add your Google API key when prompted.
+
+The iPhone version keeps the same desktop-style Reference Edit workspace with side-by-side target/result panels and slide-over controls. Projects are saved in Safari browser storage, not a Windows project folder.
+
+Use **Export backup** to download a project ZIP before clearing Safari data or moving work to another device. Use **Import backup** to restore a project ZIP.
+
+Desktop-only features are hidden or limited on iPhone:
+
+- Windows BAT launcher and automatic desktop updates
+- Open projects folder
+- Tethered Mode folder watching
+- Heavy Virtual Set workflows on smaller phones
 
 ## Download And Install
 
@@ -77,13 +103,15 @@ The menu includes:
 
 ## Project Storage
 
-Projects are saved inside the installed ISTUDIO folder:
+On Windows, projects are saved inside the installed ISTUDIO folder:
 
 ```text
 <folder with INSTALL-ISTUDIO.bat>\ISTUDIO\projects
 ```
 
 Each project gets its own folder with reference images, target photos, virtual set scenes/renders, tethered captures, generated outputs, exports, saved settings, and generation history. Project data stays on the user's computer.
+
+On iPhone PWA, projects are saved in Safari browser storage. Export a project backup ZIP to move or preserve it.
 
 ### Moving Projects Between Computers
 

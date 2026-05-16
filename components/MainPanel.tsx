@@ -422,7 +422,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
           onChange={handleFileChange}
           multiple
         />
-        <div className="relative w-full aspect-square bg-[var(--color-viewport)] lg:min-h-0 lg:flex-1">
+        <div className="relative min-h-0 w-full flex-1 bg-[var(--color-viewport)]">
           <div className="lg:hidden absolute top-4 left-4 z-20 w-28 h-28">
               <ImageUploader
                   id="reference-image-mobile"
@@ -471,8 +471,9 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                 </TransformWrapper>
               </div>
 
-              <div className={`h-full w-full grid-cols-1 gap-4 bg-[var(--color-viewport)] p-4 sm:p-6 lg:p-8 md:grid-cols-2 ${viewMode === 'side-by-side' ? 'grid' : 'hidden'}`}>
-                <div className="group relative aspect-square overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl md:aspect-auto">
+              <div className={`h-full w-full overflow-x-auto bg-[var(--color-viewport)] ${viewMode === 'side-by-side' ? 'block' : 'hidden'}`}>
+                <div className="grid h-full min-w-[720px] grid-cols-2 gap-3 p-3 sm:min-w-[820px] sm:gap-4 sm:p-5 lg:min-w-0 lg:p-8">
+                <div className="group relative min-h-0 overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl">
                   <TransformWrapper ref={originalSideRef} initialScale={1} centerOnInit={true} onTransformed={handleOriginalTransform}>
                     <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
                       {activeTargetSrc && <img src={activeTargetSrc} alt="Original" className="max-w-full max-h-full object-contain block" />}
@@ -480,7 +481,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                   </TransformWrapper>
                   <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-white/10 bg-black/70 px-2.5 py-1 text-xs font-semibold text-white/75">Target Photo</div>
                 </div>
-                <div className="group relative aspect-square overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl md:aspect-auto">
+                <div className="group relative min-h-0 overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl">
                   <TransformWrapper ref={styledSideRef} initialScale={1} centerOnInit={true} onTransformed={handleStyledTransform}>
                     <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
                       {activeTarget.generated ? (
@@ -499,6 +500,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                   <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-white/10 bg-[var(--color-accent)] px-2.5 py-1 text-xs font-semibold text-black shadow-[0_0_15px_rgba(var(--color-accent-rgb),0.24)]">
                     Reference Edit
                   </div>
+                </div>
                 </div>
               </div>
             </div>

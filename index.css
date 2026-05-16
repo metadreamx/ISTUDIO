@@ -56,6 +56,10 @@ body,
   overflow: hidden;
 }
 
+html {
+  touch-action: manipulation;
+}
+
 body {
   font-family: var(--font-sans);
   background:
@@ -272,6 +276,31 @@ textarea:focus, input[type="text"]:focus, input[type="password"]:focus, select:f
   border-bottom: 1px solid rgba(255,255,255,0.075);
   box-shadow: 0 18px 50px rgba(0,0,0,0.32);
   backdrop-filter: blur(22px);
+}
+
+@supports (padding: max(0px)) {
+  .studio-topbar {
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+  }
+}
+
+@media (max-width: 767px) {
+  .studio-topbar {
+    min-height: 62px;
+  }
+
+  .studio-nav-pill span:last-child {
+    max-width: 8.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .react-transform-wrapper,
+  .react-transform-component {
+    touch-action: none;
+  }
 }
 
 .studio-nav-pill {

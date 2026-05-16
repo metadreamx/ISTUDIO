@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import './index.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -23,4 +24,20 @@ try {
       <pre style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 4px; overflow: auto;">${error instanceof Error ? error.message : String(error)}</pre>
     </div>`;
   }
+}
+
+const shouldRegisterServiceWorker = () => {
+  const host = window.location.hostname.toLowerCase();
+  const storageOverride = new URLSearchParams(window.location.search).get('storage');
+  const isLoopback = ['localhost', '127.0.0.1', '::1'].includes(host);
+  return storageOverride === 'browser' || (window.location.protocol === 'https:' && !isLoopback);
+};
+
+if ('serviceWorker' in navigator && shouldRegisterServiceWorker()) {
+  window.addEventListener('load', () => {
+    const swUrl = `${((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL) || '/'}sw.js`;
+    navigator.serviceWorker.register(swUrl).catch((error) => {
+      console.warn('ISTUDIO service worker registration failed.', error);
+    });
+  });
 }

@@ -1,0 +1,20 @@
+{
+  "short_name": "ISTUDIO",
+  "name": "ISTUDIO by Iconic Recordings",
+  "description": "Reference-based photo editing from the visual DNA of another image.",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#090A0C",
+  "background_color": "#090A0C",
+  "categories": ["photo", "graphics", "productivity"]
+}

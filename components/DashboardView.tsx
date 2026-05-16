@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowRight,
@@ -13,7 +13,9 @@ import {
   Search,
   Sparkles,
   Trash2,
+  Upload,
   Wand2,
+  Download,
 } from 'lucide-react';
 import type { AppView, ImageTransferState, Project, ReferenceTemplate } from '../types';
 import { Logo } from '@/components/icons';
@@ -32,6 +34,8 @@ interface DashboardViewProps {
   onOpenProjectsFolder: () => void;
   canCreateProjects: boolean;
   onSelectReferenceTemplate: (template: ReferenceTemplate) => void;
+  onExportProject: (project: Project) => void;
+  onImportProject: (file: File) => void;
 }
 
 const formatDate = (timestamp: number) =>
@@ -67,7 +71,9 @@ const ProjectCard: React.FC<{
   project: Project;
   onOpen: (project: Project) => void;
   onDelete: (id: string) => void;
-}> = ({ project, onOpen, onDelete }) => {
+  onExportProject: (project: Project) => void;
+  canExport: boolean;
+}> = ({ project, onOpen, onDelete, onExportProject, canExport }) => {
   const imageCount = getProjectOutputCount(project);
   const coverImages = getProjectCoverImages(project);
 
@@ -130,11 +136,24 @@ const ProjectCard: React.FC<{
             event.stopPropagation();
             onDelete(project.id);
           }}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-muted)] opacity-0 transition-colors hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-muted)] opacity-100 transition-colors hover:bg-red-500/10 hover:text-red-400 sm:opacity-0 sm:group-hover:opacity-100"
           aria-label={`Delete ${project.name}`}
         >
           <Trash2 className="h-4 w-4" />
         </button>
+        {canExport && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onExportProject(project);
+            }}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-muted)] opacity-100 transition-colors hover:bg-[rgba(var(--color-accent-rgb),0.12)] hover:text-[var(--color-accent)] sm:opacity-0 sm:group-hover:opacity-100"
+            aria-label={`Export ${project.name} backup`}
+          >
+            <Download className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </motion.article>
   );
@@ -223,10 +242,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenProjectsFolder,
   canCreateProjects,
   onSelectReferenceTemplate,
+  onExportProject,
+  onImportProject,
 }) => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const isBrowserStorage = storageInfo?.mode === 'browser';
 
   const sortedProjects = useMemo(
     () => [...projects].sort((a, b) => b.lastModified - a.lastModified),
@@ -264,8 +287,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     setIsCreateModalOpen(false);
   };
 
+  const handleImportFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) onImportProject(file);
+    event.target.value = '';
+  };
+
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar">
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".zip,.istudio.zip,application/zip"
+        className="hidden"
+        onChange={handleImportFileChange}
+      />
       <div className="mx-auto flex w-full max-w-[1540px] flex-col gap-8 px-4 py-5 sm:px-6 lg:px-8">
         <section className="relative overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0A0B0D] px-5 pb-6 pt-14 shadow-[var(--shadow-pop)] sm:px-8 lg:min-h-[650px] lg:px-12">
           <div className="pointer-events-none absolute inset-x-0 top-0 h-48 bg-[radial-gradient(circle_at_center,rgba(var(--color-accent-rgb),0.14),transparent_48%)]" />
@@ -387,10 +423,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       <Box className="h-3.5 w-3.5 text-[var(--color-accent-secondary)]" />
                       Virtual Set
                     </button>
-                    <button type="button" onClick={onOpenProjectsFolder} disabled={storageInfo?.mode !== 'folder'} className="studio-chip inline-flex items-center gap-2 rounded-[12px] px-4 py-2 text-xs font-extrabold disabled:opacity-40">
-                      <FolderOpen className="h-3.5 w-3.5 text-[var(--color-accent-tertiary)]" />
-                      Projects folder
-                    </button>
+                    {isBrowserStorage ? (
+                      <button type="button" onClick={() => importInputRef.current?.click()} className="studio-chip inline-flex items-center gap-2 rounded-[12px] px-4 py-2 text-xs font-extrabold">
+                        <Upload className="h-3.5 w-3.5 text-[var(--color-accent-tertiary)]" />
+                        Import backup
+                      </button>
+                    ) : (
+                      <button type="button" onClick={onOpenProjectsFolder} disabled={storageInfo?.mode !== 'folder'} className="studio-chip inline-flex items-center gap-2 rounded-[12px] px-4 py-2 text-xs font-extrabold disabled:opacity-40">
+                        <FolderOpen className="h-3.5 w-3.5 text-[var(--color-accent-tertiary)]" />
+                        Projects folder
+                      </button>
+                    )}
                   </div>
                 </div>
                 <button
@@ -447,7 +490,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </span>
                 <h2 className="mt-5 text-xl font-black text-[var(--color-text)]">Virtual Set</h2>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-text-muted)]">
-                  Build a 3D set, tune the sky and lighting, render a still, then use it as reference DNA or a virtual background.
+                  {isBrowserStorage
+                    ? 'Best on desktop or iPad. Build a 3D set, tune sky and lighting, then send a render into Reference Edit.'
+                    : 'Build a 3D set, tune the sky and lighting, render a still, then use it as reference DNA or a virtual background.'}
                 </p>
               </div>
               <ArrowRight className="mt-2 h-5 w-5 text-[var(--color-accent-secondary)] transition-transform group-hover:translate-x-1" />
@@ -485,6 +530,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <Plus className="h-4 w-4" />
                 Create
               </button>
+              {isBrowserStorage && (
+                <button
+                  type="button"
+                  onClick={() => importInputRef.current?.click()}
+                  className="btn-secondary inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm"
+                >
+                  <Upload className="h-4 w-4" />
+                  Import backup
+                </button>
+              )}
             </div>
           </div>
 
@@ -497,6 +552,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     project={project}
                     onOpen={onReopen}
                     onDelete={onDeleteProject}
+                    onExportProject={onExportProject}
+                    canExport={isBrowserStorage}
                   />
                 ))}
               </AnimatePresence>
@@ -547,7 +604,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             >
               <h2 className="text-lg font-semibold text-[var(--color-text)]">Create reference edit</h2>
               <p className="mt-2 text-sm leading-6 text-[var(--color-text-muted)]">
-                Name the client, campaign, or batch. ISTUDIO will create a dedicated local folder for the reference, targets, outputs, and editing data.
+                {isBrowserStorage
+                  ? 'Name the client, campaign, or batch. ISTUDIO will save the reference, targets, outputs, and editing data in this browser. Export a backup when you want to move it.'
+                  : 'Name the client, campaign, or batch. ISTUDIO will create a dedicated local folder for the reference, targets, outputs, and editing data.'}
               </p>
 
               <form onSubmit={handleCreate} className="mt-6 space-y-5">

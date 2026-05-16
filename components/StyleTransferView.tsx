@@ -2,7 +2,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AlertCircleIcon, CameraIcon, FolderOpenIcon, PlayIcon, RadioIcon, RefreshCwIcon, SquareIcon as StopIcon } from 'lucide-react';
-import type { ImageState, StyleCategory, HistoryItem, BatchImage, CustomClothingItem, CustomAccessoryItem, CustomFaceItem, CustomBackgroundItem, CustomSkyItem, AspectRatio, Project, TetherCapture, TetherProjectState, TetherStatus } from '../types';
+import type { ImageState, StyleCategory, HistoryItem, BatchImage, CustomClothingItem, CustomAccessoryItem, CustomFaceItem, CustomBackgroundItem, CustomSkyItem, AspectRatio, Project, ProjectStorageMode, TetherCapture, TetherProjectState, TetherStatus } from '../types';
 import { ImageUploader } from './ImageUploader';
 import { MainPanel } from './MainPanel';
 import { StyleChecklist } from './StyleChecklist';
@@ -93,6 +93,7 @@ interface StyleTransferViewProps {
     onCreateProject?: (name: string, initialState?: Project['state']) => Promise<Project | null>;
     referenceTemplate?: ImageState | null;
     onReferenceTemplateConsumed?: () => void;
+    storageMode?: ProjectStorageMode;
 }
 
 const createEmptyImage = (): ImageState => ({ fileName: null, base64: null, mimeType: null });
@@ -220,7 +221,7 @@ const compactHistoryForSave = (history: HistoryItem[], fallbackReference: ImageS
     reference: compactHistoryImage(item.reference, fallbackReference.fileName),
   }));
 
-export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, onUpdateProject, onCreateProject, referenceTemplate, onReferenceTemplateConsumed }) => {
+export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, onUpdateProject, onCreateProject, referenceTemplate, onReferenceTemplateConsumed, storageMode = 'folder' }) => {
   const [referenceImage, setReferenceImage] = useState<ImageState>(createEmptyImage());
   const [targetImages, setTargetImages] = useState<BatchImage[]>([]);
   const [generationHistory, setGenerationHistory] = useState<HistoryItem[]>([]);
@@ -250,6 +251,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   const [isTetherBusy, setIsTetherBusy] = useState(false);
   const importedTetherCaptureIdsRef = useRef<Set<string>>(new Set());
   const isRefreshingTetherStatusRef = useRef(false);
+  const isBrowserStorage = storageMode === 'browser';
 
   // State for custom clothing feature
   const [customClothingItems, setCustomClothingItems] = useState({
@@ -623,6 +625,20 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   ]);
 
   const refreshTetherStatus = useCallback(async () => {
+    if (isBrowserStorage) {
+      setTetherStatus({
+        isWatching: false,
+        folderPath: null,
+        projectId: null,
+        autoEdit: false,
+        startedAt: null,
+        message: 'Tethered Mode requires the Windows desktop app.',
+        captures: [],
+        supportedExtensions: [],
+        rawExtensions: [],
+      });
+      return;
+    }
     if (isRefreshingTetherStatusRef.current) return;
     isRefreshingTetherStatusRef.current = true;
     try {
@@ -640,13 +656,14 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     } finally {
       isRefreshingTetherStatusRef.current = false;
     }
-  }, []);
+  }, [isBrowserStorage]);
 
   useEffect(() => {
+    if (isBrowserStorage) return;
     refreshTetherStatus();
     const timer = window.setInterval(refreshTetherStatus, 3000);
     return () => window.clearInterval(timer);
-  }, [refreshTetherStatus]);
+  }, [isBrowserStorage, refreshTetherStatus]);
 
   const handlePickTetherFolder = useCallback(async () => {
     setIsTetherBusy(true);
@@ -1817,7 +1834,7 @@ Before outputting, verify:
       {/* Mobile Toggle Button */}
       <button 
         onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-        className="fixed bottom-6 right-6 z-[100] flex h-14 w-14 items-center justify-center rounded-full border-4 border-black bg-[var(--color-accent)] text-black shadow-2xl transition-transform active:scale-95 lg:hidden"
+        className="fixed bottom-[84px] right-4 z-[100] flex h-14 w-14 items-center justify-center rounded-full border-4 border-black bg-[var(--color-accent)] text-black shadow-2xl transition-transform active:scale-95 lg:hidden"
         aria-label="Toggle style controls"
       >
         <div className="relative">
@@ -1869,7 +1886,7 @@ Before outputting, verify:
       </main>
 
       {/* --- Sidebar (Right) --- */}
-      <aside className={`fixed inset-0 z-[90] flex w-full flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl transition-transform duration-500 ease-in-out lg:relative lg:inset-auto lg:z-30 lg:w-full lg:max-w-[360px] xl:max-w-[400px] ${
+      <aside className={`fixed bottom-3 right-3 top-[78px] z-[90] flex w-[min(420px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl transition-transform duration-500 ease-in-out lg:relative lg:inset-auto lg:z-30 lg:w-full lg:max-w-[360px] lg:rounded-none lg:border-y-0 lg:border-r-0 xl:max-w-[400px] ${
         isMobileSidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'
       }`}>
         {/* Mobile Sidebar Close Backdrop */}
@@ -1880,7 +1897,7 @@ Before outputting, verify:
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setIsMobileSidebarOpen(false)}
-              className="lg:hidden absolute inset-0 -translate-x-full bg-black/60 backdrop-blur-sm z-[-1]"
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm lg:hidden"
             />
           )}
         </AnimatePresence>
@@ -1928,6 +1945,7 @@ Before outputting, verify:
           </section>
 
           {/* Tethered Mode Section */}
+          {!isBrowserStorage && (
           <section>
             <button
               type="button"
@@ -2144,6 +2162,7 @@ Before outputting, verify:
               )}
             </AnimatePresence>
           </section>
+          )}
 
           {/* Scene Lock Section */}
           <section>

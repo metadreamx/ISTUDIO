@@ -33,6 +33,8 @@ export interface Project {
   };
 }
 
+export type ProjectStorageMode = 'folder' | 'browser';
+
 // --- Tethered Capture ---
 
 export type TetherCaptureStatus = 'imported' | 'ignored' | 'failed';
