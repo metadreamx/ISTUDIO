@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { getGeminiTransportLabel, testGeminiConnection } from '../services/geminiService';
+import { getGeminiRelayDiagnostic, getGeminiTransportLabel, testGeminiConnection } from '../services/geminiService';
 
 export const ApiKeyModal: React.FC<{ isOpen: boolean; onClose: () => void; onSave: (key: string) => void }> = ({ isOpen, onClose, onSave }) => {
   const [key, setKey] = React.useState('');
@@ -11,6 +11,12 @@ export const ApiKeyModal: React.FC<{ isOpen: boolean; onClose: () => void; onSav
   if (!isOpen) return null;
 
   const trimmedKey = key.trim();
+  const relayDiagnostic = getGeminiRelayDiagnostic();
+  const relayTone = relayDiagnostic.status === 'ready' || relayDiagnostic.status === 'local'
+    ? 'border-lime-300/25 bg-lime-300/10 text-lime-100'
+    : relayDiagnostic.status === 'missing'
+      ? 'border-amber-300/30 bg-amber-300/10 text-amber-100'
+      : 'border-white/10 bg-white/[0.03] text-[var(--color-text-muted)]';
 
   const handleTest = async () => {
     if (!trimmedKey) {
@@ -45,6 +51,10 @@ export const ApiKeyModal: React.FC<{ isOpen: boolean; onClose: () => void; onSav
         </p>
         <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-[var(--color-text-muted)]">
           Connection path: <span className="font-semibold text-[var(--color-text)]">{getGeminiTransportLabel()}</span>
+        </div>
+        <div className={`mb-4 rounded-xl border px-4 py-3 text-xs leading-5 ${relayTone}`}>
+          <div className="font-semibold">{relayDiagnostic.label}</div>
+          <div className="mt-1 opacity-85">{relayDiagnostic.message}</div>
         </div>
         <input
           type="password"

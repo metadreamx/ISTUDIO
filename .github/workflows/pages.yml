@@ -33,6 +33,16 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Require Gemini relay URL
+        run: |
+          if [ -z "$VITE_GEMINI_RELAY_URL" ]; then
+            echo "::error::VITE_GEMINI_RELAY_URL is not set. Deploy worker/gemini-relay.js, add the Worker URL as the GitHub repository variable VITE_GEMINI_RELAY_URL, then rerun this workflow."
+            exit 1
+          fi
+          echo "Gemini relay configured for PWA build."
+        env:
+          VITE_GEMINI_RELAY_URL: ${{ vars.VITE_GEMINI_RELAY_URL }}
+
       - name: Build mobile PWA
         run: npm run build
         env:

@@ -88,6 +88,36 @@ export function getGeminiTransportLabel(): string {
   return 'Direct Dev';
 }
 
+export function getGeminiRelayDiagnostic(): { status: 'ready' | 'missing' | 'local' | 'dev'; label: string; message: string } {
+  const mode = getGeminiTransportMode();
+  if (mode === 'cloud-relay') {
+    return {
+      status: 'ready',
+      label: 'Cloud Relay connected',
+      message: 'Mobile requests will use the same Gemini relay flow as desktop.',
+    };
+  }
+  if (mode === 'local-relay') {
+    return {
+      status: 'local',
+      label: 'Local Relay connected',
+      message: 'Desktop requests are routed through the local ISTUDIO server.',
+    };
+  }
+  if (typeof window !== 'undefined' && !isLoopbackHost()) {
+    return {
+      status: 'missing',
+      label: 'Cloud Relay missing',
+      message: 'The iPhone PWA was built without VITE_GEMINI_RELAY_URL, so reference analysis and generation are disabled until the relay is configured.',
+    };
+  }
+  return {
+    status: 'dev',
+    label: 'Direct Dev',
+    message: 'Development fallback is active.',
+  };
+}
+
 export async function testGeminiConnection(apiKey?: string): Promise<{ ok: true; modelUsed: string; transport: GeminiTransportMode; message: string }> {
   const result = await generateWithRetryRaw(() => generateContentTransport({
     model: GEMINI_ANALYSIS_MODELS[0],
@@ -124,6 +154,9 @@ function normalizeRelayError(error: any, mode?: GeminiTransportMode): GeminiRela
   if (status === 401 || status === 403 || lower.includes('api key') || lower.includes('permission_denied') || lower.includes('forbidden')) {
     errorCode = 'GEMINI_KEY_REJECTED';
     userMessage = 'Gemini could not use this API key. Re-enter a valid Google Gemini API key and confirm the Gemini API is enabled for that Google project.';
+  } else if (lower.includes('service_disabled') || lower.includes('api has not been used') || lower.includes('generative language api') && lower.includes('disabled')) {
+    errorCode = 'GEMINI_API_DISABLED';
+    userMessage = 'The Gemini API is not enabled for this Google project. Enable the Gemini API for the key, then try Test Gemini again.';
   } else if (status === 429 || lower.includes('quota') || lower.includes('resource_exhausted') || lower.includes('spending cap')) {
     errorCode = 'GEMINI_QUOTA';
     userMessage = 'Gemini reached the quota or billing limit for this API key. Check your Google AI billing and quota settings.';

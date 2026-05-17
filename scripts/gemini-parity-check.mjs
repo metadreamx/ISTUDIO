@@ -36,6 +36,7 @@ assert(
 
 assert(
   gemini.includes("getGeminiTransportMode") &&
+  gemini.includes("getGeminiRelayDiagnostic") &&
   gemini.includes("local-relay") &&
   gemini.includes("cloud-relay") &&
   gemini.includes("VITE_GEMINI_RELAY_URL"),
@@ -60,7 +61,8 @@ assert(
   worker.includes("OPTIONS") &&
   worker.includes("Access-Control-Allow-Origin") &&
   worker.includes("x-istudio-gemini-key") &&
-  worker.includes("GEMINI_ORIGIN_BLOCKED"),
+  worker.includes("GEMINI_ORIGIN_BLOCKED") &&
+  worker.includes("GEMINI_API_DISABLED"),
   'Cloudflare Worker relay must handle GitHub Pages CORS, key headers, and blocked origins.',
 );
 
@@ -70,9 +72,17 @@ assert(
 );
 
 assert(
+  pagesWorkflow.includes("Require Gemini relay URL") &&
+  pagesWorkflow.includes("exit 1") &&
+  pagesWorkflow.includes("VITE_GEMINI_RELAY_URL is not set"),
+  'GitHub Pages workflow must fail loudly when the mobile Gemini relay URL is missing.',
+);
+
+assert(
   apiKeyModal.includes("Test Gemini") &&
   apiKeyModal.includes("testGeminiConnection") &&
-  apiKeyModal.includes("Connection path"),
+  apiKeyModal.includes("Connection path") &&
+  apiKeyModal.includes("getGeminiRelayDiagnostic"),
   'API key modal must include a mobile-safe Gemini connection test and transport visibility.',
 );
 

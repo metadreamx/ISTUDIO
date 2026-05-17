@@ -147,6 +147,15 @@ The GitHub Pages app is static, so mobile Gemini calls need the included Cloudfl
 3. Run the **Publish ISTUDIO PWA** workflow or push to `main`.
 4. Open [ISTUDIO PWA](https://metadreamx.github.io/ISTUDIO/) on iPhone and use **Test Gemini** in Settings.
 
+The Pages workflow intentionally fails if `VITE_GEMINI_RELAY_URL` is missing. This prevents publishing a mobile app that cannot analyze references or generate images.
+
+To deploy the relay from a local terminal:
+
+```powershell
+$env:CLOUDFLARE_API_TOKEN = "your-cloudflare-api-token"
+npx wrangler deploy
+```
+
 ## Troubleshooting
 
 - If Windows blocks the BAT file, choose **More info > Run anyway** only if you downloaded it from this official GitHub Releases page.

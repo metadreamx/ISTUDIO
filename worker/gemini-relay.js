@@ -34,6 +34,12 @@ function allowedOrigin(request) {
 
 function normalizeGeminiRelayError(status, message) {
   const lower = String(message || '').toLowerCase();
+  if (lower.includes('service_disabled') || lower.includes('api has not been used') || (lower.includes('generative language api') && lower.includes('disabled'))) {
+    return {
+      errorCode: 'GEMINI_API_DISABLED',
+      userMessage: 'The Gemini API is not enabled for this Google project. Enable the Gemini API for the key, then try Test Gemini again.',
+    };
+  }
   if (status === 401 || status === 403 || lower.includes('api key') || lower.includes('permission_denied') || lower.includes('forbidden')) {
     return {
       errorCode: 'GEMINI_KEY_REJECTED',
