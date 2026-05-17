@@ -37,6 +37,7 @@ jobs:
         run: npm run build
         env:
           VITE_BASE: /ISTUDIO/
+          VITE_GEMINI_RELAY_URL: ${{ vars.VITE_GEMINI_RELAY_URL }}
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

@@ -26,9 +26,11 @@ Then:
 2. Tap **Share**.
 3. Tap **Add to Home Screen**.
 4. Open ISTUDIO from the new Home Screen icon.
-5. Add your Google API key when prompted.
+5. Add your Google Gemini API key when prompted, then tap **Test Gemini**.
 
 The iPhone version keeps the same desktop-style Reference Edit workspace with side-by-side target/result panels and slide-over controls. Projects are saved in Safari browser storage, not a Windows project folder.
+
+Gemini requests on iPhone use the ISTUDIO Gemini relay so Safari receives the same request/response flow as the Windows desktop app. If the connection test fails, check that the GitHub Pages build has `VITE_GEMINI_RELAY_URL` set and that the key has the Gemini API enabled.
 
 Use **Export backup** to download a project ZIP before clearing Safari data or moving work to another device. Use **Import backup** to restore a project ZIP.
 
@@ -66,7 +68,14 @@ Do not use GitHub's green **Code > Download ZIP** button for installation. Regul
 
 ISTUDIO uses Google Gemini for AI image editing. Each user needs to provide their own Google API key before generating or refining images.
 
-The app will ask for the key when it is needed. The key stays on the user's computer and is not included with the download.
+The app will ask for the key when it is needed. The key is stored locally in the user's browser/app and is not included with the download. During an AI request, ISTUDIO sends the key only for that request:
+
+- Windows desktop: through the local ISTUDIO relay at `/api/gemini/generate`.
+- iPhone PWA: through the Cloudflare Worker Gemini relay configured by `VITE_GEMINI_RELAY_URL`.
+
+The relay does not store the key or save it into project files. Use the **Test Gemini** button in Settings to confirm the key can analyze and generate before starting a project.
+
+For the iPhone PWA relay, use a Gemini key with the Gemini API enabled. Prefer restricting the key to the Gemini API itself instead of using browser-only referrer restrictions, because the relay makes the final Google request on behalf of the app.
 
 ## Use ISTUDIO
 
@@ -128,6 +137,15 @@ Updates preserve:
 - `projects`
 - `.env.local`
 - local API key/settings files
+
+## Publish The iPhone PWA
+
+The GitHub Pages app is static, so mobile Gemini calls need the included Cloudflare Worker relay:
+
+1. Deploy `worker/gemini-relay.js` with Cloudflare Workers.
+2. In GitHub, add the repository variable `VITE_GEMINI_RELAY_URL` with the Worker URL, for example `https://istudio-gemini-relay.yourname.workers.dev`.
+3. Run the **Publish ISTUDIO PWA** workflow or push to `main`.
+4. Open [ISTUDIO PWA](https://metadreamx.github.io/ISTUDIO/) on iPhone and use **Test Gemini** in Settings.
 
 ## Troubleshooting
 

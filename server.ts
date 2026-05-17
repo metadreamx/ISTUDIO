@@ -127,6 +127,17 @@ type VirtualSetRenderPayload = {
   format?: 'png' | 'jpeg' | 'webp';
 };
 
+type GeminiRelayPayload = {
+  model?: string;
+  contents?: unknown;
+  config?: unknown;
+  requestType?: 'analysis' | 'image-edit' | 'diagnostic';
+};
+
+const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const GEMINI_RELAY_HEADER = 'x-istudio-gemini-key';
+const GEMINI_RELAY_MAX_BYTES = 24 * 1024 * 1024;
+
 let tetherWatcher: FSWatcher | null = null;
 let tetherSession: TetherSession | null = null;
 let tetherMessage: string | null = null;
@@ -1208,6 +1219,107 @@ function pickWindowsFolder(): Promise<string | null> {
   });
 }
 
+function normalizeGeminiRelayError(status: number, message: string) {
+  const lower = message.toLowerCase();
+  if (status === 401 || status === 403 || lower.includes('api key') || lower.includes('permission_denied') || lower.includes('forbidden')) {
+    return {
+      errorCode: 'GEMINI_KEY_REJECTED',
+      userMessage: 'Gemini could not use this API key. Re-enter a valid Google Gemini API key and confirm the Gemini API is enabled for that Google project.',
+    };
+  }
+  if (status === 404 || (lower.includes('model') && (lower.includes('not found') || lower.includes('not available') || lower.includes('unsupported')))) {
+    return {
+      errorCode: 'GEMINI_MODEL_UNAVAILABLE',
+      userMessage: "Gemini's current model is unavailable for this API key. ISTUDIO will try the next supported model.",
+    };
+  }
+  if (status === 429 || lower.includes('quota') || lower.includes('resource_exhausted') || lower.includes('spending cap')) {
+    return {
+      errorCode: 'GEMINI_QUOTA',
+      userMessage: 'Gemini reached the quota or billing limit for this API key. Check your Google AI billing and quota settings.',
+    };
+  }
+  if (status >= 500 || lower.includes('overloaded') || lower.includes('unavailable')) {
+    return {
+      errorCode: 'GEMINI_TEMPORARY_FAILURE',
+      userMessage: 'Gemini is temporarily overloaded. ISTUDIO will retry automatically.',
+    };
+  }
+  return {
+    errorCode: 'GEMINI_REQUEST_FAILED',
+    userMessage: message || 'Gemini request failed.',
+  };
+}
+
+function normalizeGeminiRelayPayload(payload: GeminiRelayPayload) {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Gemini request payload is required.');
+  }
+  if (!payload.model || typeof payload.model !== 'string') {
+    throw new Error('Gemini model is required.');
+  }
+  if (!payload.contents || typeof payload.contents !== 'object') {
+    throw new Error('Gemini contents are required.');
+  }
+
+  const body: Record<string, unknown> = {
+    contents: [payload.contents],
+  };
+  if (payload.config && typeof payload.config === 'object') {
+    body.generationConfig = payload.config;
+  }
+  return body;
+}
+
+async function proxyGeminiGenerate(payload: GeminiRelayPayload, apiKey: string) {
+  const requestBody = normalizeGeminiRelayPayload(payload);
+  const payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), 'utf8');
+  if (payloadBytes > GEMINI_RELAY_MAX_BYTES) {
+    return {
+      status: 413,
+      body: {
+        ok: false,
+        errorCode: 'GEMINI_PAYLOAD_TOO_LARGE',
+        userMessage: 'This Gemini request is too large. Use fewer assets or smaller batch images, then try again.',
+        rawStatus: 413,
+      },
+    };
+  }
+
+  const endpoint = `${GEMINI_API_BASE_URL}/models/${encodeURIComponent(payload.model)}:generateContent`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
+    body: JSON.stringify(requestBody),
+  });
+  const json = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok) {
+    const rawMessage = String((json?.error as { message?: string } | undefined)?.message || response.statusText || 'Gemini request failed.');
+    const normalized = normalizeGeminiRelayError(response.status, rawMessage);
+    return {
+      status: response.status,
+      body: {
+        ok: false,
+        ...normalized,
+        rawStatus: response.status,
+        rawMessage,
+      },
+    };
+  }
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      modelUsed: payload.model,
+      response: json,
+    },
+  };
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -1225,6 +1337,33 @@ async function startServer() {
   app.use(jsonPayloadErrorHandler);
   await ensureProjectsDir();
   await migrateLegacyProjectFiles();
+
+  app.post('/api/gemini/generate', async (req, res) => {
+    try {
+      const apiKey = String(req.header(GEMINI_RELAY_HEADER) || '').trim();
+      if (!apiKey) {
+        res.status(401).json({
+          ok: false,
+          errorCode: 'GEMINI_KEY_MISSING',
+          userMessage: 'Add your Google Gemini API key in ISTUDIO Settings before analyzing or generating.',
+          rawStatus: 401,
+        });
+        return;
+      }
+
+      const result = await proxyGeminiGenerate(req.body as GeminiRelayPayload, apiKey);
+      res.status(result.status).json(result.body);
+    } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : 'Gemini relay failed.';
+      const normalized = normalizeGeminiRelayError(500, rawMessage);
+      res.status(500).json({
+        ok: false,
+        ...normalized,
+        rawStatus: 500,
+        rawMessage,
+      });
+    }
+  });
 
   app.get('/api/projects', async (req, res) => {
     try {

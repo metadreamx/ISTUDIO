@@ -231,9 +231,12 @@ const App: React.FC = () => {
   const [isBusy, setIsBusy] = useState(false);
 
   const handleSaveApiKey = (key: string) => {
-    // WARNING: Storing API keys in localStorage is insecure for production applications. 
-    // This is implemented as a client-side prototype for demonstration purposes.
-    localStorage.setItem('user_api_key', key);
+    const trimmedKey = key.trim();
+    if (!trimmedKey) {
+      setToast('Paste a Gemini API key first');
+      return;
+    }
+    localStorage.setItem('user_api_key', trimmedKey);
     setHasApiKey(true);
     setToast('API key saved');
   };

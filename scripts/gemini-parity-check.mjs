@@ -14,15 +14,19 @@ const style = read('components/StyleTransferView.tsx');
 const uploader = read('components/ImageUploader.tsx');
 const mainPanel = read('components/MainPanel.tsx');
 const sw = read('public/sw.js');
+const server = read('server.ts');
+const worker = read('worker/gemini-relay.js');
+const pagesWorkflow = read('.github/workflows/pages.yml');
+const apiKeyModal = read('components/ApiKeyModal.tsx');
 
 assert(
-  gemini.includes("savedKey || process.env.API_KEY || process.env.GEMINI_API_KEY"),
+  gemini.includes("getStoredGeminiApiKey") && gemini.includes("getBuildGeminiApiKey") && gemini.includes("overrideKey || getStoredGeminiApiKey() || getBuildGeminiApiKey()"),
   'User-saved API key must take priority over bundled/build-time keys.',
 );
 
 assert(
-  gemini.includes("GEMINI_ANALYSIS_MODELS") && gemini.includes("generateContentWithModelFallback"),
-  'Reference/target analysis must use Gemini model fallback.',
+  gemini.includes("GEMINI_ANALYSIS_MODELS") && gemini.includes("generateContentWithModelFallback") && gemini.includes("generateContentTransport(buildParams(model))"),
+  'Reference/target analysis must use Gemini model fallback through the shared transport.',
 );
 
 assert(
@@ -31,8 +35,45 @@ assert(
 );
 
 assert(
+  gemini.includes("getGeminiTransportMode") &&
+  gemini.includes("local-relay") &&
+  gemini.includes("cloud-relay") &&
+  gemini.includes("VITE_GEMINI_RELAY_URL"),
+  'Gemini must support local relay, cloud relay, and configured PWA relay URL transport modes.',
+);
+
+assert(
   !gemini.includes("imageAnalysisModel") && !gemini.includes("imageEditModel"),
   'Single hardcoded Gemini model constants should not be used.',
+);
+
+assert(
+  server.includes("app.post('/api/gemini/generate'") &&
+  server.includes("x-istudio-gemini-key") &&
+  server.includes("proxyGeminiGenerate") &&
+  server.includes("generationConfig"),
+  'Desktop app must expose a local Gemini relay that forwards canonical generateContent payloads.',
+);
+
+assert(
+  (worker.includes("metadreamx.github.io") || worker.includes("metadreamx\\.github\\.io")) &&
+  worker.includes("OPTIONS") &&
+  worker.includes("Access-Control-Allow-Origin") &&
+  worker.includes("x-istudio-gemini-key") &&
+  worker.includes("GEMINI_ORIGIN_BLOCKED"),
+  'Cloudflare Worker relay must handle GitHub Pages CORS, key headers, and blocked origins.',
+);
+
+assert(
+  pagesWorkflow.includes("VITE_GEMINI_RELAY_URL: ${{ vars.VITE_GEMINI_RELAY_URL }}"),
+  'GitHub Pages workflow must pass the configured Gemini relay URL into the PWA build.',
+);
+
+assert(
+  apiKeyModal.includes("Test Gemini") &&
+  apiKeyModal.includes("testGeminiConnection") &&
+  apiKeyModal.includes("Connection path"),
+  'API key modal must include a mobile-safe Gemini connection test and transport visibility.',
 );
 
 assert(

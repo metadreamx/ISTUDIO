@@ -1,22 +1,216 @@
 
-import { GoogleGenAI, Modality, Type, type GenerateContentConfig, type GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Type, type GenerateContentConfig, type GenerateContentResponse } from "@google/genai";
 import type { StyleCategory, ImageState, StyleSubItem, AspectRatio } from '../types';
 
 export const GEMINI_ANALYSIS_MODELS = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.0-flash'] as const;
 export const GEMINI_IMAGE_EDIT_MODELS = ['gemini-2.5-flash-image', 'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview'] as const;
 const GEMINI_IMAGE_SIZES = ['4K', '2K', '1K'] as const;
 
-// Helper to create a fresh AI client for every request.
-// User-entered keys must win over bundled/build-time keys so a stale release
-// key can never block a working key pasted in Settings.
-const getAiClient = () => {
-    const savedKey = localStorage.getItem('user_api_key')?.trim();
-    const API_KEY = savedKey || process.env.API_KEY || process.env.GEMINI_API_KEY;
+type GeminiContentPart = { inlineData: { data: string; mimeType: string } } | { text: string };
+type GeminiContentPayload = {
+  parts: GeminiContentPart[];
+  role?: string;
+};
+type GeminiGeneratePayload = {
+  model: string;
+  contents: GeminiContentPayload;
+  config?: GenerateContentConfig;
+  requestType?: 'analysis' | 'image-edit' | 'diagnostic';
+};
+type GeminiRelaySuccess = {
+  ok: true;
+  modelUsed: string;
+  response: GenerateContentResponse;
+  transport: GeminiTransportMode;
+};
+type GeminiRelayFailure = {
+  ok: false;
+  errorCode: string;
+  userMessage: string;
+  rawStatus?: number;
+  rawMessage?: string;
+  transport?: GeminiTransportMode;
+};
+type GeminiRelayResponse = GeminiRelaySuccess | GeminiRelayFailure;
+export type GeminiTransportMode = 'local-relay' | 'cloud-relay' | 'direct-dev';
+
+const GEMINI_RELAY_HEADER = 'x-istudio-gemini-key';
+const DEFAULT_CLOUD_RELAY_URL = '';
+
+function runtimeEnv(): Record<string, string | undefined> {
+  return ((import.meta as unknown as { env?: Record<string, string | undefined> }).env || {});
+}
+
+export function getStoredGeminiApiKey(): string {
+  return localStorage.getItem('user_api_key')?.trim() || '';
+}
+
+function getBuildGeminiApiKey(): string {
+  return (process.env.API_KEY || process.env.GEMINI_API_KEY || '').trim();
+}
+
+function getGeminiApiKey(overrideKey?: string): string {
+  const API_KEY = (overrideKey || getStoredGeminiApiKey() || getBuildGeminiApiKey()).trim();
 
     if (!API_KEY) {
       throw new Error("Gemini API key is missing. On iPhone, tap Settings and enter your Google Gemini API key before analyzing or generating.");
     }
-    return new GoogleGenAI({ apiKey: API_KEY });
+    return API_KEY;
+}
+
+// User-entered keys must win over bundled/build-time keys so a stale release
+// key can never block a working key pasted in Settings.
+const getAiClient = (overrideKey?: string) => new GoogleGenAI({ apiKey: getGeminiApiKey(overrideKey) });
+
+function getConfiguredCloudRelayUrl(): string {
+  const configured = runtimeEnv().VITE_GEMINI_RELAY_URL || DEFAULT_CLOUD_RELAY_URL;
+  return (configured || '').trim().replace(/\/+$/, '');
+}
+
+function isLoopbackHost(hostname = window.location.hostname.toLowerCase()): boolean {
+  return ['localhost', '127.0.0.1', '::1'].includes(hostname);
+}
+
+export function getGeminiTransportMode(): GeminiTransportMode {
+  if (typeof window !== 'undefined' && isLoopbackHost()) {
+    return 'local-relay';
+  }
+  if (getConfiguredCloudRelayUrl()) {
+    return 'cloud-relay';
+  }
+  return 'direct-dev';
+}
+
+export function getGeminiTransportLabel(): string {
+  const mode = getGeminiTransportMode();
+  if (mode === 'local-relay') return 'Local Relay';
+  if (mode === 'cloud-relay') return 'Cloud Relay';
+  return 'Direct Dev';
+}
+
+export async function testGeminiConnection(apiKey?: string): Promise<{ ok: true; modelUsed: string; transport: GeminiTransportMode; message: string }> {
+  const result = await generateWithRetryRaw(() => generateContentTransport({
+    model: GEMINI_ANALYSIS_MODELS[0],
+    requestType: 'diagnostic',
+    contents: {
+      parts: [{ text: 'Reply with exactly: ISTUDIO Gemini connected.' }],
+    },
+    config: {
+      temperature: 0,
+    },
+  }, apiKey));
+
+  return {
+    ok: true,
+    modelUsed: result.modelUsed,
+    transport: result.transport,
+    message: getResponseText(result.response) || 'Gemini connected.',
+  };
+}
+
+function relayEndpointForMode(mode: GeminiTransportMode): string | null {
+  if (mode === 'local-relay') return '/api/gemini/generate';
+  if (mode === 'cloud-relay') return `${getConfiguredCloudRelayUrl()}/api/gemini/generate`;
+  return null;
+}
+
+function normalizeRelayError(error: any, mode?: GeminiTransportMode): GeminiRelayFailure {
+  const status = Number(error?.rawStatus || error?.status || error?.code || 0) || undefined;
+  const message = String(error?.userMessage || error?.rawMessage || error?.message || error || 'Gemini request failed.');
+  const lower = message.toLowerCase();
+  let errorCode = String(error?.errorCode || 'GEMINI_REQUEST_FAILED');
+  let userMessage = message;
+
+  if (status === 401 || status === 403 || lower.includes('api key') || lower.includes('permission_denied') || lower.includes('forbidden')) {
+    errorCode = 'GEMINI_KEY_REJECTED';
+    userMessage = 'Gemini could not use this API key. Re-enter a valid Google Gemini API key and confirm the Gemini API is enabled for that Google project.';
+  } else if (status === 429 || lower.includes('quota') || lower.includes('resource_exhausted') || lower.includes('spending cap')) {
+    errorCode = 'GEMINI_QUOTA';
+    userMessage = 'Gemini reached the quota or billing limit for this API key. Check your Google AI billing and quota settings.';
+  } else if (isModelUnavailableError(error)) {
+    errorCode = 'GEMINI_MODEL_UNAVAILABLE';
+    userMessage = "Gemini's current model is unavailable for this API key. ISTUDIO tried the supported fallback models, but none were available.";
+  } else if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('load failed')) {
+    errorCode = 'GEMINI_RELAY_UNREACHABLE';
+    userMessage = mode === 'cloud-relay'
+      ? 'ISTUDIO could not reach the Gemini cloud relay. Check your connection and try again.'
+      : 'ISTUDIO could not reach the local Gemini relay. Restart ISTUDIO from LAUNCH.bat and try again.';
+  }
+
+  return {
+    ok: false,
+    errorCode,
+    userMessage,
+    rawStatus: status,
+    rawMessage: message,
+    transport: mode,
+  };
+}
+
+async function generateContentDirect(payload: GeminiGeneratePayload, apiKey?: string): Promise<GeminiRelaySuccess> {
+  const ai = getAiClient(apiKey);
+  const response = await ai.models.generateContent({
+    model: payload.model,
+    contents: payload.contents,
+    ...(payload.config ? { config: payload.config } : {}),
+  });
+  return {
+    ok: true,
+    modelUsed: payload.model,
+    response,
+    transport: 'direct-dev',
+  };
+}
+
+async function generateContentViaRelay(payload: GeminiGeneratePayload, mode: GeminiTransportMode, apiKey?: string): Promise<GeminiRelaySuccess> {
+  const endpoint = relayEndpointForMode(mode);
+  if (!endpoint) {
+    return generateContentDirect(payload, apiKey);
+  }
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      [GEMINI_RELAY_HEADER]: getGeminiApiKey(apiKey),
+    },
+    body: JSON.stringify(payload),
+  });
+  const json = await response.json().catch(() => null) as GeminiRelayResponse | null;
+  if (!response.ok || !json?.ok) {
+    const failure = normalizeRelayError(json || { status: response.status, message: response.statusText }, mode);
+    throw Object.assign(new Error(failure.userMessage), failure);
+  }
+
+  return {
+    ...json,
+    transport: mode,
+  };
+}
+
+async function generateContentTransport(payload: GeminiGeneratePayload, apiKey?: string): Promise<GeminiRelaySuccess> {
+  const mode = getGeminiTransportMode();
+  if (mode === 'direct-dev' && !isLoopbackHost()) {
+    throw Object.assign(
+      new Error('The mobile Gemini relay is not configured yet. Set VITE_GEMINI_RELAY_URL for the GitHub Pages build, then republish ISTUDIO.'),
+      {
+        ok: false,
+        errorCode: 'GEMINI_RELAY_NOT_CONFIGURED',
+        userMessage: 'The mobile Gemini relay is not configured yet. Set VITE_GEMINI_RELAY_URL for the GitHub Pages build, then republish ISTUDIO.',
+        transport: mode,
+      },
+    );
+  }
+
+  try {
+    return await generateContentViaRelay(payload, mode, apiKey);
+  } catch (error) {
+    if (mode === 'local-relay') {
+      console.warn('Local Gemini relay unavailable, falling back to direct dev transport.', error);
+      return generateContentDirect(payload, apiKey);
+    }
+    throw error;
+  }
 };
 
 async function hashString(str: string): Promise<string> {
@@ -40,22 +234,32 @@ function saveToCache(key: string, value: any): void {
 }
 
 function toUserFacingGeminiError(error: any): Error {
+    const relayFailure = normalizeRelayError(error, error?.transport);
+    if (error?.errorCode || error?.userMessage) {
+      return new Error(relayFailure.userMessage);
+    }
     const message = String(error?.message || error || '');
     const status = Number(error?.status || error?.code || 0);
     if (isModelUnavailableError(error)) {
       return new Error("Gemini's current preview model is unavailable for this API key. ISTUDIO tried the supported fallback models, but none were available. Make sure the Gemini API is enabled for your Google project.");
     }
     if (status === 401 || status === 403 || message.includes('API key') || message.includes('API_KEY') || message.includes('Forbidden') || message.includes('PERMISSION_DENIED')) {
-      return new Error("Gemini could not use this API key. On iPhone, open Settings, re-enter a valid Google Gemini API key, and make sure the key allows requests from https://metadreamx.github.io/*.");
+      return new Error("Gemini could not use this API key. Re-enter a valid Google Gemini API key and confirm the Gemini API is enabled for that Google project.");
     }
     if (message.includes('Failed to fetch') || message.includes('NetworkError') || message.includes('Load failed')) {
-      return new Error("Gemini could not be reached from this browser. Check your connection, disable content blockers for ISTUDIO, and make sure your API key is allowed for the GitHub Pages app.");
+      return new Error("Gemini could not be reached. Check your connection and make sure ISTUDIO's Gemini relay is available.");
     }
     return error instanceof Error ? error : new Error(message || 'Gemini request failed.');
 }
 
 function getResponseText(response: GenerateContentResponse): string {
-  return response.text?.trim() || '';
+  const directText = typeof response.text === 'string' ? response.text.trim() : '';
+  if (directText) return directText;
+  const candidateText = response.candidates?.[0]?.content?.parts
+    ?.map((part: any) => typeof part.text === 'string' ? part.text : '')
+    .join('')
+    .trim();
+  return candidateText || '';
 }
 
 function getGeminiErrorMessage(error: any): string {
@@ -86,6 +290,7 @@ type GeminiContentResult = {
   response: GenerateContentResponse;
   model: string;
   imageSize?: string;
+  transport?: GeminiTransportMode;
 };
 
 // Retry logic for transient API errors (429 Quota, 503 Overloaded, 500 Internal)
@@ -129,17 +334,16 @@ async function generateWithRetry<T>(operation: () => Promise<T>, retries = 4, de
 }
 
 async function generateContentWithModelFallback(
-  ai: GoogleGenAI,
   models: readonly string[],
-  buildParams: (model: string) => Parameters<typeof ai.models.generateContent>[0],
+  buildParams: (model: string) => GeminiGeneratePayload,
   label: string,
 ): Promise<GeminiContentResult> {
   let lastError: unknown = null;
 
   for (const model of models) {
     try {
-      const response = await generateWithRetryRaw(() => ai.models.generateContent(buildParams(model)));
-      return { response, model };
+      const result = await generateWithRetryRaw(() => generateContentTransport(buildParams(model)));
+      return { response: result.response, model: result.modelUsed || model, transport: result.transport };
     } catch (error) {
       lastError = error;
       if (isModelUnavailableError(error)) {
@@ -154,18 +358,17 @@ async function generateContentWithModelFallback(
 }
 
 async function generateAnalysis(
-  contents: { parts: Array<{ inlineData: { data: string; mimeType: string } } | { text: string }> },
+  contents: GeminiContentPayload,
   config: GenerateContentConfig | undefined,
   label: string,
 ): Promise<GenerateContentResponse> {
-  const ai = getAiClient();
   const result = await generateContentWithModelFallback(
-    ai,
     GEMINI_ANALYSIS_MODELS,
     (model) => ({
       model,
       contents,
       ...(config ? { config } : {}),
+      requestType: 'analysis',
     }),
     label,
   );
@@ -173,8 +376,7 @@ async function generateAnalysis(
 }
 
 async function generateImageEditWithFallback(
-  ai: GoogleGenAI,
-  contents: { parts: Array<{ inlineData: { data: string; mimeType: string } } | { text: string }> },
+  contents: GeminiContentPayload,
   aspectRatio?: AspectRatio,
   seed?: number,
 ): Promise<GeminiContentResult> {
@@ -183,19 +385,20 @@ async function generateImageEditWithFallback(
   for (const model of GEMINI_IMAGE_EDIT_MODELS) {
     for (const imageSize of GEMINI_IMAGE_SIZES) {
       try {
-        const response = await generateWithRetryRaw(() => ai.models.generateContent({
+        const result = await generateWithRetryRaw(() => generateContentTransport({
           model,
           contents,
           config: {
-            responseModalities: [Modality.IMAGE, Modality.TEXT],
+            responseModalities: ['IMAGE', 'TEXT'],
             imageConfig: {
               imageSize,
               ...(aspectRatio ? { aspectRatio } : {}),
             },
             ...(seed !== undefined ? { seed } : {}),
           },
+          requestType: 'image-edit',
         }));
-        return { response, model, imageSize };
+        return { response: result.response, model: result.modelUsed || model, imageSize, transport: result.transport };
       } catch (error) {
         lastError = error;
         if (isImageConfigError(error) && imageSize !== GEMINI_IMAGE_SIZES[GEMINI_IMAGE_SIZES.length - 1]) {
@@ -753,8 +956,7 @@ export async function editImage(
 
   const textPart = { text: prompt };
   
-  const ai = getAiClient();
-  const { response } = await generateImageEditWithFallback(ai, { parts: [...imageParts, textPart] }, aspectRatio, seed);
+  const { response } = await generateImageEditWithFallback({ parts: [...imageParts, textPart] }, aspectRatio, seed);
 
   const editedImagePart = response.candidates?.[0]?.content?.parts?.find(part => part.inlineData);
   if (editedImagePart?.inlineData) {
