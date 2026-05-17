@@ -201,7 +201,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
   const [isDragging, setIsDragging] = useState(false);
   const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportFormat>('png');
-  const [exportQuality, setExportQuality] = useState(92);
+  const [exportQuality, setExportQuality] = useState(96);
   const [isZipping, setIsZipping] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
 
@@ -471,7 +471,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
             </div>
           ) : (
             <div className={`w-full h-full transition-[filter,transform] duration-500 ${activeTarget.status === 'processing' ? 'filter blur-2xl brightness-50 scale-105' : ''}`}>
-              <div className={`w-full h-full ${viewMode === 'single' ? 'p-8' : 'hidden'}`}>
+              <div className={`w-full h-full ${viewMode === 'single' ? 'p-2 sm:p-4 lg:p-8' : 'hidden'}`}>
                 <TransformWrapper ref={singleViewRef} initialScale={1} centerOnInit={true} onTransformed={(ref, state) => handleTransform(ref, state)}>
                   <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
                     {activeImage === 'generated' && !activeTarget.generated ? (
@@ -669,7 +669,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                               <label htmlFor="quality-slider" className="text-xs font-semibold text-[var(--color-text-muted)]">Compression quality</label>
                               <span className="text-xs font-semibold text-[var(--color-accent)]">{exportQuality}%</span>
                           </div>
-                          <input id="quality-slider" type="range" min="80" max="100" step="1" value={exportQuality} onChange={e => setExportQuality(Number(e.target.value))} className="w-full h-1 bg-[#222222] appearance-none cursor-pointer themed-slider accent-[var(--color-accent)]" />
+                              <input id="quality-slider" type="range" min="90" max="100" step="1" value={exportQuality} onChange={e => setExportQuality(Number(e.target.value))} className="w-full h-1 bg-[#222222] appearance-none cursor-pointer themed-slider accent-[var(--color-accent)]" />
                       </div>
                   )}
                   <div className="pt-4 space-y-2">

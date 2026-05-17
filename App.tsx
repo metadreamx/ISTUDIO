@@ -194,7 +194,7 @@ const InfoPanel: React.FC<{
           <CheckCircle2Icon className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
           <p className="text-sm leading-6 text-[var(--color-text-muted)]">
             {storageInfo?.mode === 'browser'
-              ? 'ISTUDIO stores reference DNA, target photos, generated edits, and outputs in this browser. Export project backups before clearing Safari data or switching devices.'
+              ? 'ISTUDIO stores reference DNA, target photos, generated edits, and outputs on this device. Export project backups before clearing Safari data or switching devices.'
               : 'ISTUDIO stores reference DNA, target photos, generated edits, and outputs as editable files in the local projects folder.'}
           </p>
           {storageInfo && (
@@ -279,13 +279,11 @@ const App: React.FC = () => {
         setProjects(dbProjects);
         setProjectStorageInfo(storageInfo);
         if (!storageInfo) {
-          setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH.bat.");
-        } else if (storageInfo.mode === 'browser') {
-          setToast("iPhone PWA mode: projects save in browser storage. Export backups to move them.");
+          setToast("Project storage is unavailable. Reopen ISTUDIO and try again.");
         }
       } catch (e) {
         console.error("Failed to load project folder data", e);
-        setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH.bat.");
+        setToast("Project storage is unavailable. Reopen ISTUDIO and try again.");
       } finally {
         setIsLoading(false);
       }
@@ -299,7 +297,7 @@ const App: React.FC = () => {
 
   const createProject = useCallback(async (name: string, nextView: AppView = 'style-transfer', initialState: Project['state'] = {}): Promise<Project | null> => {
     if (!projectStorageInfo) {
-      setToast("Project storage server is not running. Restart ISTUDIO with LAUNCH.bat.");
+      setToast("Project storage is unavailable. Reopen ISTUDIO and try again.");
       return null;
     }
     const newProject: Project = {

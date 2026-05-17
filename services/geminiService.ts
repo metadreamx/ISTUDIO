@@ -95,10 +95,9 @@ export function getGeminiTransportMode(): GeminiTransportMode {
 
 export function getGeminiTransportLabel(): string {
   const mode = getGeminiTransportMode();
-  if (mode === 'local-relay') return 'Local Relay';
-  if (mode === 'netlify-relay') return 'Netlify Relay';
-  if (mode === 'cloud-relay') return 'Cloud Relay';
-  return 'Direct Dev';
+  if (mode === 'local-relay') return 'Secure desktop AI';
+  if (mode === 'netlify-relay' || mode === 'cloud-relay') return 'Secure mobile AI';
+  return 'AI connection';
 }
 
 export function getGeminiRelayDiagnostic(): { status: 'ready' | 'missing' | 'local' | 'dev'; label: string; message: string } {
@@ -106,35 +105,35 @@ export function getGeminiRelayDiagnostic(): { status: 'ready' | 'missing' | 'loc
   if (mode === 'cloud-relay') {
     return {
       status: 'ready',
-      label: 'Cloud Relay connected',
-      message: 'Mobile requests will use the same Gemini relay flow as desktop.',
+      label: 'AI Ready',
+      message: 'Reference analysis and high-quality generation are ready on this device.',
     };
   }
   if (mode === 'netlify-relay') {
     return {
       status: 'ready',
-      label: 'Netlify Relay connected',
-      message: 'Mobile requests will use the Netlify Function relay on the same site.',
+      label: 'AI Ready',
+      message: 'Reference analysis and high-quality generation are ready on this device.',
     };
   }
   if (mode === 'local-relay') {
     return {
       status: 'local',
-      label: 'Local Relay connected',
-      message: 'Desktop requests are routed through the local ISTUDIO server.',
+      label: 'AI Ready',
+      message: 'Reference analysis and high-quality generation are ready on this device.',
     };
   }
   if (typeof window !== 'undefined' && !isLoopbackHost()) {
     return {
       status: 'missing',
-      label: 'Gemini Relay missing',
-      message: 'This PWA was built without a Netlify relay or VITE_GEMINI_RELAY_URL, so reference analysis and generation are disabled until the relay is configured.',
+      label: 'AI setup incomplete',
+      message: 'AI image editing is not available in this build. Open the latest ISTUDIO link and try again.',
     };
   }
   return {
     status: 'dev',
-    label: 'Direct Dev',
-    message: 'Development fallback is active.',
+    label: 'AI Ready',
+    message: 'Reference analysis and high-quality generation are ready on this device.',
   };
 }
 
@@ -177,7 +176,7 @@ function normalizeRelayError(error: any, mode?: GeminiTransportMode): GeminiRela
     userMessage = 'Gemini could not use this API key. Re-enter a valid Google Gemini API key and confirm the Gemini API is enabled for that Google project.';
   } else if (lower.includes('service_disabled') || lower.includes('api has not been used') || lower.includes('generative language api') && lower.includes('disabled')) {
     errorCode = 'GEMINI_API_DISABLED';
-    userMessage = 'The Gemini API is not enabled for this Google project. Enable the Gemini API for the key, then try Test Gemini again.';
+    userMessage = 'The Gemini API is not enabled for this Google project. Enable the Gemini API for the key, then test the AI connection again.';
   } else if (status === 429 || lower.includes('quota') || lower.includes('resource_exhausted') || lower.includes('spending cap')) {
     errorCode = 'GEMINI_QUOTA';
     userMessage = 'Gemini reached the quota or billing limit for this API key. Check your Google AI billing and quota settings.';
@@ -186,11 +185,7 @@ function normalizeRelayError(error: any, mode?: GeminiTransportMode): GeminiRela
     userMessage = "Gemini's current model is unavailable for this API key. ISTUDIO tried the supported fallback models, but none were available.";
   } else if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('load failed')) {
     errorCode = 'GEMINI_RELAY_UNREACHABLE';
-    userMessage = mode === 'netlify-relay'
-      ? 'ISTUDIO could not reach the Netlify Gemini relay. Make sure the Netlify Function is deployed, then refresh the app.'
-      : mode === 'cloud-relay'
-      ? 'ISTUDIO could not reach the Gemini cloud relay. Check your connection and try again.'
-      : 'ISTUDIO could not reach the local Gemini relay. Restart ISTUDIO from LAUNCH.bat and try again.';
+    userMessage = 'ISTUDIO could not reach the AI service. Check your internet connection, reopen ISTUDIO, and try again.';
   }
 
   return {
@@ -248,11 +243,11 @@ async function generateContentTransport(payload: GeminiGeneratePayload, apiKey?:
   const mode = getGeminiTransportMode();
   if (mode === 'direct-dev' && !isLoopbackHost()) {
     throw Object.assign(
-      new Error('The mobile Gemini relay is not configured yet. Deploy on Netlify or set VITE_GEMINI_RELAY_URL for the GitHub Pages build, then republish ISTUDIO.'),
+      new Error('AI image editing is not available in this build. Open the latest ISTUDIO link and try again.'),
       {
         ok: false,
         errorCode: 'GEMINI_RELAY_NOT_CONFIGURED',
-        userMessage: 'The mobile Gemini relay is not configured yet. Deploy on Netlify or set VITE_GEMINI_RELAY_URL for the GitHub Pages build, then republish ISTUDIO.',
+        userMessage: 'AI image editing is not available in this build. Open the latest ISTUDIO link and try again.',
         transport: mode,
       },
     );

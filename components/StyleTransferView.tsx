@@ -1220,7 +1220,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
     try {
         const queuedOrBatchCount = targetImages.filter(img => img.status === 'queued' || img.status === 'processing').length;
-        const qualityMode = queuedOrBatchCount > 1 || targetImages.length > 1 ? 'batch' : 'single';
+        const qualityMode = queuedOrBatchCount > 1 ? 'batch' : 'single';
         const targetInput = await imageToGeminiInput(imageToProcess.target, qualityMode);
         if (!targetInput.base64 || !targetInput.mimeType) {
           throw new Error('Could not load the project images for generation.');
@@ -1896,7 +1896,7 @@ Before outputting, verify:
       </main>
 
       {/* --- Sidebar (Right) --- */}
-      <aside className={`fixed bottom-2 right-2 top-[calc(env(safe-area-inset-top)+68px)] z-[90] w-[min(420px,calc(100vw-16px))] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl transition-transform duration-500 ease-in-out lg:relative lg:inset-auto lg:z-30 lg:flex lg:w-full lg:max-w-[360px] lg:translate-x-0 lg:rounded-none lg:border-y-0 lg:border-r-0 xl:max-w-[400px] ${
+      <aside className={`fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.5rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top)+68px)] z-[90] w-[min(420px,calc(100vw-16px))] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl transition-transform duration-500 ease-in-out lg:relative lg:inset-auto lg:z-30 lg:flex lg:w-full lg:max-w-[360px] lg:translate-x-0 lg:rounded-none lg:border-y-0 lg:border-r-0 xl:max-w-[400px] ${
         isMobileSidebarOpen ? 'flex translate-x-0' : 'hidden translate-x-full'
       }`}>
         {/* Mobile Sidebar Close Backdrop */}

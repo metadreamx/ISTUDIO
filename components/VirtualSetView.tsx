@@ -2104,7 +2104,7 @@ export const VirtualSetView: React.FC<VirtualSetViewProps> = ({
   const ensureProject = useCallback(async (nextScene: VirtualSetScene): Promise<Project | null> => {
     if (project) return project;
     if (!onCreateProject || !canCreateProjects) {
-      setError('Project storage is not available. Restart ISTUDIO with LAUNCH.bat.');
+      setError('Project storage is not available. Reopen ISTUDIO and try again.');
       return null;
     }
     return await onCreateProject('Virtual Set Session', {

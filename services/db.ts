@@ -167,7 +167,7 @@ async function apiRequest<T>(url: string, init?: RequestInit, timeoutMs = 30000)
         }
         const contentType = response.headers.get('content-type') || '';
         if (!contentType.includes('application/json')) {
-            throw new Error('Project storage server is not running. Restart ISTUDIO with LAUNCH.bat.');
+            throw new Error('Project storage is unavailable. Reopen ISTUDIO and try again.');
         }
         return await response.json() as T;
     } finally {
@@ -510,7 +510,7 @@ export async function getProject(id: string): Promise<Project> {
         const db = await getDB();
         const tx = db.transaction(PROJECTS_STORE, 'readonly');
         const project = await promisifyRequest(tx.objectStore(PROJECTS_STORE).get(id));
-        if (!project) throw new Error('Project not found in browser storage.');
+        if (!project) throw new Error('Project not found on this device.');
         return await hydrateBrowserProject(project);
     }
 
@@ -572,7 +572,7 @@ export async function getProjectStorageInfo(): Promise<ProjectStorageInfo> {
     if (isBrowserProjectStorage()) {
         const projects = await getIndexedDbProjects();
         return {
-            path: 'iPhone browser storage (IndexedDB). Use Export Backup to move projects.',
+            path: 'Saved on this device. Use Export Backup to move projects.',
             projectCount: projects.length,
             mode: 'browser',
         };
@@ -587,7 +587,7 @@ export async function getProjectStorageInfo(): Promise<ProjectStorageInfo> {
 
 export async function openProjectsFolder(): Promise<void> {
     if (isBrowserProjectStorage()) {
-        throw new Error('Project folders are available in the Windows app. On iPhone, use project backup export/import.');
+        throw new Error('Project folders are available in the desktop app. Use project backup export/import on this device.');
     }
 
     await apiRequest<{ ok: boolean }>(`${PROJECTS_FOLDER_API}/open`, {
@@ -724,7 +724,7 @@ export async function useVirtualSetRenderAsReference(projectId: string, image: I
 
 export async function exportProjectBackup(projectId: string): Promise<Blob> {
     if (!isBrowserProjectStorage()) {
-        throw new Error('Project ZIP backups are for the iPhone PWA storage mode.');
+        throw new Error('Project backup export is available on mobile.');
     }
 
     const db = await getDB();
@@ -770,7 +770,7 @@ function rewriteProjectIdAndAssetPaths(value: unknown, oldProjectId: string, new
 
 export async function importProjectBackup(file: File): Promise<Project> {
     if (!isBrowserProjectStorage()) {
-        throw new Error('Project ZIP import is for the iPhone PWA storage mode.');
+        throw new Error('Project backup import is available on mobile.');
     }
 
     const zip = await JSZip.loadAsync(file);

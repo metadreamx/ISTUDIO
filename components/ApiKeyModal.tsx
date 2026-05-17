@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { getGeminiRelayDiagnostic, getGeminiTransportLabel, testGeminiConnection } from '../services/geminiService';
+import { getGeminiRelayDiagnostic, testGeminiConnection } from '../services/geminiService';
 
 export const ApiKeyModal: React.FC<{ isOpen: boolean; onClose: () => void; onSave: (key: string) => void }> = ({ isOpen, onClose, onSave }) => {
   const [key, setKey] = React.useState('');
@@ -30,7 +30,7 @@ export const ApiKeyModal: React.FC<{ isOpen: boolean; onClose: () => void; onSav
     try {
       const result = await testGeminiConnection(trimmedKey);
       setTestStatus('success');
-      setTestMessage(`Connected through ${getGeminiTransportLabel()} using ${result.modelUsed}.`);
+      setTestMessage(`AI connection ready. High-quality reference editing is available on this device.`);
     } catch (error) {
       setTestStatus('error');
       setTestMessage(error instanceof Error ? error.message : 'Gemini connection test failed.');
@@ -44,14 +44,11 @@ export const ApiKeyModal: React.FC<{ isOpen: boolean; onClose: () => void; onSav
       <div className="premium-panel w-full max-w-md rounded-2xl p-6 shadow-2xl">
         <h2 className="mb-2 text-xl font-semibold text-[var(--color-text)]">Connect Gemini</h2>
         <p className="mb-5 text-sm leading-6 text-[var(--color-text-muted)]">
-          Add your Gemini API key to enable reference analysis and image generation. The key is stored locally in this browser and sent only for each Gemini request.
+          Add your Gemini API key to enable reference analysis and image generation. The key is saved on this device and used only when ISTUDIO creates an edit.
         </p>
         <p className="mb-4 text-xs leading-5 text-[var(--color-text-muted)]">
-          Use a Google AI Studio/Gemini key with the Gemini API enabled. For the iPhone PWA relay, avoid browser-only referrer restrictions; restrict the key to the Gemini API instead.
+          Use a Google Gemini API key with image generation access enabled.
         </p>
-        <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-[var(--color-text-muted)]">
-          Connection path: <span className="font-semibold text-[var(--color-text)]">{getGeminiTransportLabel()}</span>
-        </div>
         <div className={`mb-4 rounded-xl border px-4 py-3 text-xs leading-5 ${relayTone}`}>
           <div className="font-semibold">{relayDiagnostic.label}</div>
           <div className="mt-1 opacity-85">{relayDiagnostic.message}</div>
@@ -83,7 +80,7 @@ export const ApiKeyModal: React.FC<{ isOpen: boolean; onClose: () => void; onSav
             disabled={isTesting}
             className="btn-secondary px-4 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isTesting ? 'Testing...' : 'Test Gemini'}
+            {isTesting ? 'Checking...' : 'Test AI'}
           </button>
           <button 
             onClick={() => { onSave(trimmedKey); onClose(); }}

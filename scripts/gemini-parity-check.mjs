@@ -99,11 +99,11 @@ assert(
 );
 
 assert(
-  apiKeyModal.includes("Test Gemini") &&
+  apiKeyModal.includes("Test AI") &&
   apiKeyModal.includes("testGeminiConnection") &&
-  apiKeyModal.includes("Connection path") &&
+  apiKeyModal.includes("AI connection ready") &&
   apiKeyModal.includes("getGeminiRelayDiagnostic"),
-  'API key modal must include a mobile-safe Gemini connection test and transport visibility.',
+  'API key modal must include a mobile-safe AI connection test and user-friendly connection status.',
 );
 
 assert(
