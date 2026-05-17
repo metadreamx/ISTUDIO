@@ -32,7 +32,7 @@ type GeminiRelayFailure = {
   transport?: GeminiTransportMode;
 };
 type GeminiRelayResponse = GeminiRelaySuccess | GeminiRelayFailure;
-export type GeminiTransportMode = 'local-relay' | 'cloud-relay' | 'direct-dev';
+export type GeminiTransportMode = 'local-relay' | 'netlify-relay' | 'cloud-relay' | 'direct-dev';
 
 const GEMINI_RELAY_HEADER = 'x-istudio-gemini-key';
 const DEFAULT_CLOUD_RELAY_URL = '';
@@ -67,11 +67,23 @@ function getConfiguredCloudRelayUrl(): string {
   return (configured || '').trim().replace(/\/+$/, '');
 }
 
+function isNetlifyHosted(): boolean {
+  const env = runtimeEnv();
+  const target = (env.VITE_HOSTING_TARGET || env.VITE_GEMINI_RELAY_MODE || '').toLowerCase();
+  if (target === 'netlify' || target === 'netlify-relay') return true;
+  if (typeof window === 'undefined') return false;
+  const hostname = window.location.hostname.toLowerCase();
+  return hostname.endsWith('.netlify.app') || hostname.endsWith('.netlify.com');
+}
+
 function isLoopbackHost(hostname = window.location.hostname.toLowerCase()): boolean {
   return ['localhost', '127.0.0.1', '::1'].includes(hostname);
 }
 
 export function getGeminiTransportMode(): GeminiTransportMode {
+  if (isNetlifyHosted()) {
+    return 'netlify-relay';
+  }
   if (typeof window !== 'undefined' && isLoopbackHost()) {
     return 'local-relay';
   }
@@ -84,6 +96,7 @@ export function getGeminiTransportMode(): GeminiTransportMode {
 export function getGeminiTransportLabel(): string {
   const mode = getGeminiTransportMode();
   if (mode === 'local-relay') return 'Local Relay';
+  if (mode === 'netlify-relay') return 'Netlify Relay';
   if (mode === 'cloud-relay') return 'Cloud Relay';
   return 'Direct Dev';
 }
@@ -97,6 +110,13 @@ export function getGeminiRelayDiagnostic(): { status: 'ready' | 'missing' | 'loc
       message: 'Mobile requests will use the same Gemini relay flow as desktop.',
     };
   }
+  if (mode === 'netlify-relay') {
+    return {
+      status: 'ready',
+      label: 'Netlify Relay connected',
+      message: 'Mobile requests will use the Netlify Function relay on the same site.',
+    };
+  }
   if (mode === 'local-relay') {
     return {
       status: 'local',
@@ -107,8 +127,8 @@ export function getGeminiRelayDiagnostic(): { status: 'ready' | 'missing' | 'loc
   if (typeof window !== 'undefined' && !isLoopbackHost()) {
     return {
       status: 'missing',
-      label: 'Cloud Relay missing',
-      message: 'The iPhone PWA was built without VITE_GEMINI_RELAY_URL, so reference analysis and generation are disabled until the relay is configured.',
+      label: 'Gemini Relay missing',
+      message: 'This PWA was built without a Netlify relay or VITE_GEMINI_RELAY_URL, so reference analysis and generation are disabled until the relay is configured.',
     };
   }
   return {
@@ -140,6 +160,7 @@ export async function testGeminiConnection(apiKey?: string): Promise<{ ok: true;
 
 function relayEndpointForMode(mode: GeminiTransportMode): string | null {
   if (mode === 'local-relay') return '/api/gemini/generate';
+  if (mode === 'netlify-relay') return '/.netlify/functions/gemini-generate';
   if (mode === 'cloud-relay') return `${getConfiguredCloudRelayUrl()}/api/gemini/generate`;
   return null;
 }
@@ -165,7 +186,9 @@ function normalizeRelayError(error: any, mode?: GeminiTransportMode): GeminiRela
     userMessage = "Gemini's current model is unavailable for this API key. ISTUDIO tried the supported fallback models, but none were available.";
   } else if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('load failed')) {
     errorCode = 'GEMINI_RELAY_UNREACHABLE';
-    userMessage = mode === 'cloud-relay'
+    userMessage = mode === 'netlify-relay'
+      ? 'ISTUDIO could not reach the Netlify Gemini relay. Make sure the Netlify Function is deployed, then refresh the app.'
+      : mode === 'cloud-relay'
       ? 'ISTUDIO could not reach the Gemini cloud relay. Check your connection and try again.'
       : 'ISTUDIO could not reach the local Gemini relay. Restart ISTUDIO from LAUNCH.bat and try again.';
   }
@@ -225,11 +248,11 @@ async function generateContentTransport(payload: GeminiGeneratePayload, apiKey?:
   const mode = getGeminiTransportMode();
   if (mode === 'direct-dev' && !isLoopbackHost()) {
     throw Object.assign(
-      new Error('The mobile Gemini relay is not configured yet. Set VITE_GEMINI_RELAY_URL for the GitHub Pages build, then republish ISTUDIO.'),
+      new Error('The mobile Gemini relay is not configured yet. Deploy on Netlify or set VITE_GEMINI_RELAY_URL for the GitHub Pages build, then republish ISTUDIO.'),
       {
         ok: false,
         errorCode: 'GEMINI_RELAY_NOT_CONFIGURED',
-        userMessage: 'The mobile Gemini relay is not configured yet. Set VITE_GEMINI_RELAY_URL for the GitHub Pages build, then republish ISTUDIO.',
+        userMessage: 'The mobile Gemini relay is not configured yet. Deploy on Netlify or set VITE_GEMINI_RELAY_URL for the GitHub Pages build, then republish ISTUDIO.',
         transport: mode,
       },
     );

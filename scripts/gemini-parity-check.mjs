@@ -16,6 +16,8 @@ const mainPanel = read('components/MainPanel.tsx');
 const sw = read('public/sw.js');
 const server = read('server.ts');
 const worker = read('worker/gemini-relay.js');
+const netlifyFunction = read('netlify/functions/gemini-generate.js');
+const netlifyConfig = read('netlify.toml');
 const pagesWorkflow = read('.github/workflows/pages.yml');
 const apiKeyModal = read('components/ApiKeyModal.tsx');
 
@@ -38,9 +40,11 @@ assert(
   gemini.includes("getGeminiTransportMode") &&
   gemini.includes("getGeminiRelayDiagnostic") &&
   gemini.includes("local-relay") &&
+  gemini.includes("netlify-relay") &&
   gemini.includes("cloud-relay") &&
+  gemini.includes("/.netlify/functions/gemini-generate") &&
   gemini.includes("VITE_GEMINI_RELAY_URL"),
-  'Gemini must support local relay, cloud relay, and configured PWA relay URL transport modes.',
+  'Gemini must support local relay, Netlify relay, cloud relay, and configured PWA relay URL transport modes.',
 );
 
 assert(
@@ -64,6 +68,22 @@ assert(
   worker.includes("GEMINI_ORIGIN_BLOCKED") &&
   worker.includes("GEMINI_API_DISABLED"),
   'Cloudflare Worker relay must handle GitHub Pages CORS, key headers, and blocked origins.',
+);
+
+assert(
+  netlifyFunction.includes("x-istudio-gemini-key") &&
+  netlifyFunction.includes("generativelanguage.googleapis.com") &&
+  netlifyFunction.includes("generationConfig") &&
+  netlifyFunction.includes("GEMINI_API_DISABLED") &&
+  netlifyFunction.includes("GEMINI_PAYLOAD_TOO_LARGE"),
+  'Netlify Function relay must forward canonical Gemini requests and normalize common Gemini failures.',
+);
+
+assert(
+  netlifyConfig.includes('functions = "netlify/functions"') &&
+  netlifyConfig.includes('publish = "dist"') &&
+  netlifyConfig.includes('VITE_HOSTING_TARGET = "netlify"'),
+  'Netlify config must publish dist, use netlify/functions, and build the app in Netlify relay mode.',
 );
 
 assert(

@@ -18,7 +18,7 @@ ISTUDIO is a Windows-first creative app for reference-based photo editing. Use o
 
 The easiest iPhone version is the ISTUDIO PWA:
 
-[Open ISTUDIO PWA](https://metadreamx.github.io/ISTUDIO/)
+Open your Netlify ISTUDIO site in Safari.
 
 Then:
 
@@ -30,7 +30,7 @@ Then:
 
 The iPhone version keeps the same desktop-style Reference Edit workspace with side-by-side target/result panels and slide-over controls. Projects are saved in Safari browser storage, not a Windows project folder.
 
-Gemini requests on iPhone use the ISTUDIO Gemini relay so Safari receives the same request/response flow as the Windows desktop app. If the connection test fails, check that the GitHub Pages build has `VITE_GEMINI_RELAY_URL` set and that the key has the Gemini API enabled.
+Gemini requests on iPhone use the Netlify Function relay built into the same site, so Safari receives the same request/response flow as the Windows desktop app. If the connection test fails, confirm the Netlify deploy includes `netlify/functions/gemini-generate.js` and that the key has the Gemini API enabled.
 
 Use **Export backup** to download a project ZIP before clearing Safari data or moving work to another device. Use **Import backup** to restore a project ZIP.
 
@@ -71,7 +71,8 @@ ISTUDIO uses Google Gemini for AI image editing. Each user needs to provide thei
 The app will ask for the key when it is needed. The key is stored locally in the user's browser/app and is not included with the download. During an AI request, ISTUDIO sends the key only for that request:
 
 - Windows desktop: through the local ISTUDIO relay at `/api/gemini/generate`.
-- iPhone PWA: through the Cloudflare Worker Gemini relay configured by `VITE_GEMINI_RELAY_URL`.
+- iPhone PWA on Netlify: through the same-site Netlify Function at `/.netlify/functions/gemini-generate`.
+- GitHub Pages fallback: through a Cloudflare Worker relay configured by `VITE_GEMINI_RELAY_URL`.
 
 The relay does not store the key or save it into project files. Use the **Test Gemini** button in Settings to confirm the key can analyze and generate before starting a project.
 
@@ -140,7 +141,21 @@ Updates preserve:
 
 ## Publish The iPhone PWA
 
-The GitHub Pages app is static, so mobile Gemini calls need the included Cloudflare Worker relay:
+Netlify is the recommended mobile/PWA host because it can serve both the app and the Gemini relay.
+
+Use these Netlify settings:
+
+- Build command: `npm run build`
+- Publish directory: `dist`
+- Functions directory: `netlify/functions`
+
+The included `netlify.toml` sets the app to Netlify relay mode automatically. No Cloudflare token or `VITE_GEMINI_RELAY_URL` is needed for Netlify hosting.
+
+After Netlify deploys, open the Netlify site on iPhone Safari and use **Test Gemini** in Settings. The app should show **Netlify Relay connected**.
+
+### Optional GitHub Pages Fallback
+
+GitHub Pages is static, so mobile Gemini calls need the included Cloudflare Worker relay:
 
 1. Deploy `worker/gemini-relay.js` with Cloudflare Workers.
 2. In GitHub, add the repository variable `VITE_GEMINI_RELAY_URL` with the Worker URL, for example `https://istudio-gemini-relay.yourname.workers.dev`.
