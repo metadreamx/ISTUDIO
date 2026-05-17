@@ -191,9 +191,32 @@ interface MainPanelProps {
   referenceDominantColor?: string | null;
   selectedImageIds: Set<string>;
   onToggleImageSelection: (id: string) => void;
+  onGenerate: () => void;
+  onCancelGeneration: () => void;
+  isActionable: boolean;
+  isProcessing: boolean;
+  generateButtonText: string;
 }
 
-export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, activeIndex, onSelectIndex, onImagesSelect, onRemoveImage, generationStatus, referenceImage, onReferenceImageSelect, referenceDominantColor, selectedImageIds, onToggleImageSelection }) => {
+export const MainPanel: React.FC<MainPanelProps> = ({
+  activeTarget,
+  allTargets,
+  activeIndex,
+  onSelectIndex,
+  onImagesSelect,
+  onRemoveImage,
+  generationStatus,
+  referenceImage,
+  onReferenceImageSelect,
+  referenceDominantColor,
+  selectedImageIds,
+  onToggleImageSelection,
+  onGenerate,
+  onCancelGeneration,
+  isActionable,
+  isProcessing,
+  generateButtonText,
+}) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [viewMode, setViewMode] = useState<'single' | 'side-by-side'>('side-by-side');
   const [activeImage, setActiveImage] = useState<'target' | 'generated'>('generated');
@@ -578,7 +601,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                     <PlusIcon className="w-3.5 h-3.5" />
                     <span>Add</span>
                 </button>
-                <div className="flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1">
+                <div className="hidden items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1 sm:flex">
                   <button
                     onClick={() => { setViewMode('single'); setActiveImage('target'); }}
                     className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${viewMode === 'single' && activeImage === 'target' ? 'bg-[var(--color-accent)] text-black' : 'text-[var(--color-text-muted)] hover:text-white'}`}
@@ -593,6 +616,27 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
                     Result
                   </button>
                 </div>
+            </div>
+
+            <div className="flex min-w-[150px] flex-1 shrink-0 justify-center py-1 lg:hidden">
+              {isProcessing ? (
+                <button
+                  onClick={onCancelGeneration}
+                  className="flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-red-400/25 bg-red-500/15 px-4 text-xs font-extrabold text-red-100 shadow-[0_12px_34px_rgba(0,0,0,0.32)]"
+                >
+                  <XCircleIcon className="h-3.5 w-3.5" />
+                  <span>Cancel</span>
+                </button>
+              ) : (
+                <button
+                  onClick={onGenerate}
+                  disabled={!isActionable}
+                  className="primary-cta flex h-10 w-full items-center justify-center gap-2 px-4 text-xs font-extrabold shadow-[0_16px_38px_rgba(var(--color-accent-rgb),0.18)] disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  <SparklesIcon className="h-3.5 w-3.5" />
+                  <span className="truncate">{generateButtonText}</span>
+                </button>
+              )}
             </div>
 
             <div className="hidden shrink-0 items-center gap-2 py-1 md:flex">

@@ -1891,6 +1891,11 @@ Before outputting, verify:
               referenceDominantColor={accentColor}
               selectedImageIds={selectedImageIds}
               onToggleImageSelection={handleToggleSelection}
+              onGenerate={handleQueueGeneration}
+              onCancelGeneration={handleCancelGeneration}
+              isActionable={isActionable}
+              isProcessing={activeTargetIsProcessing}
+              generateButtonText={getGenerateButtonText()}
             />
         </div>
       </main>

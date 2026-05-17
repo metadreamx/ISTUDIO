@@ -113,6 +113,12 @@ assert(
   'Reference and target analysis must preserve image MIME types.',
 );
 
+assert(
+  style.includes("const qualityMode = queuedOrBatchCount > 1 ? 'batch' : 'single'") &&
+  !style.includes("queuedOrBatchCount > 1 || targetImages.length > 1 ? 'batch' : 'single'"),
+  'Single active edits must keep high-fidelity single-image quality even when more targets are loaded.',
+);
+
 const referenceInputIndex = style.indexOf("const referenceInput = await imageToGeminiInput(referenceImage, qualityMode)");
 const referencePushIndex = style.indexOf("inlineData: { data: referenceInput.base64, mimeType: referenceInput.mimeType }");
 const customInputIndex = style.indexOf("const activeItemInputs = await Promise.all");
