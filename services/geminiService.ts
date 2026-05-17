@@ -1,18 +1,17 @@
 
-import { GoogleGenAI, Modality, Type, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Modality, Type, type GenerateContentConfig, type GenerateContentResponse } from "@google/genai";
 import type { StyleCategory, ImageState, StyleSubItem, AspectRatio } from '../types';
 
+export const GEMINI_ANALYSIS_MODELS = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.0-flash'] as const;
+export const GEMINI_IMAGE_EDIT_MODELS = ['gemini-2.5-flash-image', 'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview'] as const;
+const GEMINI_IMAGE_SIZES = ['4K', '2K', '1K'] as const;
+
 // Helper to create a fresh AI client for every request.
-// This ensures we always use the latest API_KEY from process.env,
-// which is critical when the user selects a key dynamically via window.aistudio.openSelectKey().
+// User-entered keys must win over bundled/build-time keys so a stale release
+// key can never block a working key pasted in Settings.
 const getAiClient = () => {
-    // Priority 1: Platform-provided API key (from window.aistudio.openSelectKey())
-    let API_KEY = process.env.API_KEY;
-    
-    // Priority 2: Manually entered API key (from localStorage)
-    if (!API_KEY) {
-        API_KEY = localStorage.getItem('user_api_key') || undefined;
-    }
+    const savedKey = localStorage.getItem('user_api_key')?.trim();
+    const API_KEY = savedKey || process.env.API_KEY || process.env.GEMINI_API_KEY;
 
     if (!API_KEY) {
       throw new Error("Gemini API key is missing. On iPhone, tap Settings and enter your Google Gemini API key before analyzing or generating.");
@@ -43,7 +42,10 @@ function saveToCache(key: string, value: any): void {
 function toUserFacingGeminiError(error: any): Error {
     const message = String(error?.message || error || '');
     const status = Number(error?.status || error?.code || 0);
-    if (status === 401 || status === 403 || message.includes('API key') || message.includes('API_KEY') || message.includes('Forbidden') || message.includes('PERMISSION_DENIED') || message.includes('Requested entity was not found')) {
+    if (isModelUnavailableError(error)) {
+      return new Error("Gemini's current preview model is unavailable for this API key. ISTUDIO tried the supported fallback models, but none were available. Make sure the Gemini API is enabled for your Google project.");
+    }
+    if (status === 401 || status === 403 || message.includes('API key') || message.includes('API_KEY') || message.includes('Forbidden') || message.includes('PERMISSION_DENIED')) {
       return new Error("Gemini could not use this API key. On iPhone, open Settings, re-enter a valid Google Gemini API key, and make sure the key allows requests from https://metadreamx.github.io/*.");
     }
     if (message.includes('Failed to fetch') || message.includes('NetworkError') || message.includes('Load failed')) {
@@ -52,8 +54,42 @@ function toUserFacingGeminiError(error: any): Error {
     return error instanceof Error ? error : new Error(message || 'Gemini request failed.');
 }
 
+function getResponseText(response: GenerateContentResponse): string {
+  return response.text?.trim() || '';
+}
+
+function getGeminiErrorMessage(error: any): string {
+  return String(error?.message || error || '');
+}
+
+function isModelUnavailableError(error: any): boolean {
+  const message = getGeminiErrorMessage(error).toLowerCase();
+  const status = Number(error?.status || error?.code || 0);
+  return (
+    status === 404 ||
+    (message.includes('model') && (
+      message.includes('not found') ||
+      message.includes('not available') ||
+      message.includes('not supported') ||
+      message.includes('unsupported')
+    )) ||
+    message.includes('requested entity was not found')
+  );
+}
+
+function isImageConfigError(error: any): boolean {
+  const message = getGeminiErrorMessage(error).toLowerCase();
+  return message.includes('imagesize') || message.includes('image size') || message.includes('aspectratio') || message.includes('aspect ratio') || message.includes('imageconfig');
+}
+
+type GeminiContentResult = {
+  response: GenerateContentResponse;
+  model: string;
+  imageSize?: string;
+};
+
 // Retry logic for transient API errors (429 Quota, 503 Overloaded, 500 Internal)
-async function generateWithRetry<T>(operation: () => Promise<T>, retries = 5, delay = 3000): Promise<T> {
+async function generateWithRetryRaw<T>(operation: () => Promise<T>, retries = 4, delay = 2500): Promise<T> {
     try {
         return await operation();
     } catch (error: any) {
@@ -66,10 +102,9 @@ async function generateWithRetry<T>(operation: () => Promise<T>, retries = 5, de
             throw new Error("Gemini API Quota Exceeded: Your project has exceeded its spending cap. Please check your Google Cloud billing settings.");
         }
 
-        // Handle "Forbidden" errors which often indicate a key selection issue in the shared environment
-        if (message.includes('Forbidden') || message.includes('Requested entity was not found')) {
+        if (message.includes('Forbidden')) {
             console.error("Gemini API Forbidden error. This usually means the API key is missing, invalid, or lacks permissions for the selected model.");
-            throw toUserFacingGeminiError(error);
+            throw error;
         }
 
         const isTransient = code === 429 || code === 503 || code === 500 || message.includes('overloaded') || message.includes('Internal Server Error') || message.includes('UNAVAILABLE') || message.includes('RESOURCE_EXHAUSTED');
@@ -77,17 +112,108 @@ async function generateWithRetry<T>(operation: () => Promise<T>, retries = 5, de
         if (isTransient && retries > 0) {
             console.warn(`Gemini API transient error (${code}): ${message}. Retrying in ${delay}ms... (Retries left: ${retries})`);
             await new Promise(resolve => setTimeout(resolve, delay));
-            return generateWithRetry(operation, retries - 1, delay * 2);
+            return generateWithRetryRaw(operation, retries - 1, delay * 2);
         }
         
         console.error(`Gemini API fatal error (${code}): ${message}`);
+        throw error;
+    }
+}
+
+async function generateWithRetry<T>(operation: () => Promise<T>, retries = 4, delay = 2500): Promise<T> {
+    try {
+        return await generateWithRetryRaw(operation, retries, delay);
+    } catch (error) {
         throw toUserFacingGeminiError(error);
     }
 }
 
+async function generateContentWithModelFallback(
+  ai: GoogleGenAI,
+  models: readonly string[],
+  buildParams: (model: string) => Parameters<typeof ai.models.generateContent>[0],
+  label: string,
+): Promise<GeminiContentResult> {
+  let lastError: unknown = null;
 
-const imageAnalysisModel = 'gemini-3-flash-preview';
-const imageEditModel = 'gemini-3.1-flash-image-preview';
+  for (const model of models) {
+    try {
+      const response = await generateWithRetryRaw(() => ai.models.generateContent(buildParams(model)));
+      return { response, model };
+    } catch (error) {
+      lastError = error;
+      if (isModelUnavailableError(error)) {
+        console.warn(`Gemini ${label} model unavailable, trying fallback: ${model}`, error);
+        continue;
+      }
+      throw toUserFacingGeminiError(error);
+    }
+  }
+
+  throw toUserFacingGeminiError(lastError || new Error(`No Gemini ${label} model was available.`));
+}
+
+async function generateAnalysis(
+  contents: { parts: Array<{ inlineData: { data: string; mimeType: string } } | { text: string }> },
+  config: GenerateContentConfig | undefined,
+  label: string,
+): Promise<GenerateContentResponse> {
+  const ai = getAiClient();
+  const result = await generateContentWithModelFallback(
+    ai,
+    GEMINI_ANALYSIS_MODELS,
+    (model) => ({
+      model,
+      contents,
+      ...(config ? { config } : {}),
+    }),
+    label,
+  );
+  return result.response;
+}
+
+async function generateImageEditWithFallback(
+  ai: GoogleGenAI,
+  contents: { parts: Array<{ inlineData: { data: string; mimeType: string } } | { text: string }> },
+  aspectRatio?: AspectRatio,
+  seed?: number,
+): Promise<GeminiContentResult> {
+  let lastError: unknown = null;
+
+  for (const model of GEMINI_IMAGE_EDIT_MODELS) {
+    for (const imageSize of GEMINI_IMAGE_SIZES) {
+      try {
+        const response = await generateWithRetryRaw(() => ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            responseModalities: [Modality.IMAGE, Modality.TEXT],
+            imageConfig: {
+              imageSize,
+              ...(aspectRatio ? { aspectRatio } : {}),
+            },
+            ...(seed !== undefined ? { seed } : {}),
+          },
+        }));
+        return { response, model, imageSize };
+      } catch (error) {
+        lastError = error;
+        if (isImageConfigError(error) && imageSize !== GEMINI_IMAGE_SIZES[GEMINI_IMAGE_SIZES.length - 1]) {
+          console.warn(`Gemini rejected ${imageSize} image output, retrying smaller output.`, error);
+          continue;
+        }
+        if (isModelUnavailableError(error) || isImageConfigError(error)) {
+          console.warn(`Gemini image model/config unavailable, trying fallback: ${model} ${imageSize}`, error);
+          break;
+        }
+        throw toUserFacingGeminiError(error);
+      }
+    }
+  }
+
+  throw toUserFacingGeminiError(lastError || new Error('No Gemini image generation model was available.'));
+}
+
 export type EditImageQualityMode = 'single' | 'batch';
 
 const SUPPORTED_GEMINI_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -332,17 +458,16 @@ Return the result as a JSON object that strictly adheres to the provided schema.
         },
     };
 
-    const ai = getAiClient();
-    const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
-        model: imageAnalysisModel,
-        contents: { parts: [imagePart, { text: prompt }] },
-        config: {
-            responseMimeType: "application/json",
-            responseSchema: schema,
-        },
-    }));
+    const response = await generateAnalysis(
+      { parts: [imagePart, { text: prompt }] },
+      {
+          responseMimeType: "application/json",
+          responseSchema: schema,
+      },
+      'reference analysis',
+    );
 
-    const resultText = response.text!.trim();
+    const resultText = getResponseText(response);
     let parsedResult: any[];
     try {
         parsedResult = JSON.parse(resultText);
@@ -394,13 +519,9 @@ export async function analyzeReferenceScene(base64Image: string, mimeType = 'ima
   
   This blueprint is the "Source of Truth" for the scene. Be forensic, technical, and exhaustive.`;
 
-  const ai = getAiClient();
-  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
-    model: imageAnalysisModel,
-    contents: { parts: [imagePart, { text: prompt }] },
-  }));
+  const response = await generateAnalysis({ parts: [imagePart, { text: prompt }] }, undefined, 'reference scene analysis');
 
-  const result = response.text || "";
+  const result = getResponseText(response);
   saveToCache(cacheKey, result);
   return result;
 }
@@ -424,14 +545,11 @@ export async function analyzeTargetImageDetails(base64Image: string, mimeType = 
   - **Scene Lighting Inference:** State what kind of environment would naturally create that lighting on this subject.
   Be concise and forensic.`;
   
-  const ai = getAiClient();
-  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
-    model: imageAnalysisModel,
-    contents: { parts: [imagePart, { text: prompt }] },
-  }));
+  const response = await generateAnalysis({ parts: [imagePart, { text: prompt }] }, undefined, 'target image analysis');
 
-  saveToCache(cacheKey, response.text || "");
-  return response.text || "";
+  const result = getResponseText(response);
+  saveToCache(cacheKey, result);
+  return result;
 }
 
 /**
@@ -446,13 +564,9 @@ export async function analyzeClothingImage(base64Image: string, mimeType = 'imag
   const imagePart = fileToGenerativePart(base64Image, mimeType);
   const prompt = "Describe the clothing item in this image in detail. Focus on the type of clothing (e.g., 'a blue denim jacket'), its material, fit, color, and any patterns or logos. Be concise and descriptive, as if instructing an artist. Example: 'A vintage, slightly oversized, faded blue denim jacket with copper buttons and a small tear on the left sleeve.'";
 
-  const ai = getAiClient();
-  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
-    model: imageAnalysisModel,
-    contents: { parts: [imagePart, { text: prompt }] },
-  }));
+  const response = await generateAnalysis({ parts: [imagePart, { text: prompt }] }, undefined, 'clothing analysis');
 
-  const result = response.text || "";
+  const result = getResponseText(response);
   saveToCache(cacheKey, result);
   return result;
 }
@@ -469,14 +583,11 @@ export async function analyzeAccessoryImage(base64Image: string, mimeType = 'ima
   const imagePart = fileToGenerativePart(base64Image, mimeType);
   const prompt = "Describe the accessory item in this image in detail. Focus on the type of accessory (e.g., 'a gold necklace', 'a black fedora hat', 'aviator sunglasses'), its material, style, color, and any distinct features. Be concise and descriptive. Example: 'A delicate, thin 18k gold chain necklace with a small circular pendant.'";
 
-  const ai = getAiClient();
-  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
-    model: imageAnalysisModel,
-    contents: { parts: [imagePart, { text: prompt }] },
-  }));
+  const response = await generateAnalysis({ parts: [imagePart, { text: prompt }] }, undefined, 'accessory analysis');
 
-  saveToCache(cacheKey, response.text || "");
-  return response.text || "";
+  const result = getResponseText(response);
+  saveToCache(cacheKey, result);
+  return result;
 }
 
 /**
@@ -491,14 +602,11 @@ export async function analyzeFaceImage(base64Image: string, mimeType = 'image/jp
   const imagePart = fileToGenerativePart(base64Image, mimeType);
   const prompt = "Describe the key facial features of the person in this image in detail. Focus on face shape (e.g., oval, square), eye color and shape (e.g., almond-shaped, blue), nose shape (e.g., button nose, prominent bridge), lip shape (e.g., full, thin), and any distinctive features like freckles, dimples, or specific eyebrow shape. Be concise and descriptive, as if instructing a portrait artist. Example: 'An oval face with high cheekbones, deep-set green eyes, a straight nose, and full lips. She has light freckles across her nose and cheeks.'";
 
-  const ai = getAiClient();
-  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
-    model: imageAnalysisModel,
-    contents: { parts: [imagePart, { text: prompt }] },
-  }));
+  const response = await generateAnalysis({ parts: [imagePart, { text: prompt }] }, undefined, 'face analysis');
 
-  saveToCache(cacheKey, response.text || "");
-  return response.text || "";
+  const result = getResponseText(response);
+  saveToCache(cacheKey, result);
+  return result;
 }
 
 /**
@@ -522,14 +630,11 @@ export async function analyzeBackgroundImage(base64Image: string, mimeType = 'im
 
 Your output must be this structured list. Be as precise as a professional 3D lighting artist.`;
 
-  const ai = getAiClient();
-  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
-    model: imageAnalysisModel,
-    contents: { parts: [imagePart, { text: prompt }] },
-  }));
+  const response = await generateAnalysis({ parts: [imagePart, { text: prompt }] }, undefined, 'background analysis');
 
-  saveToCache(cacheKey, response.text || "");
-  return response.text || "";
+  const result = getResponseText(response);
+  saveToCache(cacheKey, result);
+  return result;
 }
 
 /**
@@ -550,14 +655,11 @@ export async function analyzeSkyImage(base64Image: string, mimeType = 'image/jpe
   
   Provide a concise, descriptive paragraph that acts as a blueprint for generating/compositing this exact sky.`;
 
-  const ai = getAiClient();
-  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
-    model: imageAnalysisModel,
-    contents: { parts: [imagePart, { text: prompt }] },
-  }));
+  const response = await generateAnalysis({ parts: [imagePart, { text: prompt }] }, undefined, 'sky analysis');
 
-  saveToCache(cacheKey, response.text || "");
-  return response.text || "";
+  const result = getResponseText(response);
+  saveToCache(cacheKey, result);
+  return result;
 }
 
 /**
@@ -581,14 +683,11 @@ export async function analyzeTwinImages(images: ImageState[]): Promise<string> {
   
   Provide a highly detailed, technical description that acts as a "Master Blueprint" for this subject. This description will be used to maintain perfect consistency when generating new images of this person.`;
 
-  const ai = getAiClient();
-  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
-    model: imageAnalysisModel,
-    contents: { parts: [...imageParts, { text: prompt }] },
-  }));
+  const response = await generateAnalysis({ parts: [...imageParts, { text: prompt }] }, undefined, 'digital twin analysis');
 
-  saveToCache(cacheKey, response.text || "");
-  return response.text || "";
+  const result = getResponseText(response);
+  saveToCache(cacheKey, result);
+  return result;
 }
 
 
@@ -597,9 +696,6 @@ export async function analyzeTwinImages(images: ImageState[]): Promise<string> {
  */
 export async function evaluateRealism(generatedBase64: string, generatedMimeType: string, targetBase64: string, targetMimeType: string): Promise<'realistic' | 'slightly off'> {
   try {
-    const ai = getAiClient();
-    const model = 'gemini-3-flash-preview';
-
     const prompt = `
 You are an expert photography and compositing judge.
 I am providing you with two images:
@@ -618,21 +714,21 @@ Respond with ONLY ONE of the following two phrases:
 "slightly off" - if there are noticeable compositing errors, floating subjects, mismatched lighting, or AI artifacts.
 `;
 
-    const response = await ai.models.generateContent({
-      model,
-      contents: {
+    const response = await generateAnalysis(
+      {
         parts: [
           { inlineData: { data: targetBase64, mimeType: targetMimeType } },
           { inlineData: { data: generatedBase64, mimeType: generatedMimeType } },
           { text: prompt }
-        ]
+        ],
       },
-      config: {
+      {
         temperature: 0.1,
-      }
-    });
+      },
+      'realism evaluation',
+    );
 
-    const text = response.text?.toLowerCase().trim() || '';
+    const text = getResponseText(response).toLowerCase();
     if (text.includes('slightly off')) {
       return 'slightly off';
     }
@@ -658,25 +754,14 @@ export async function editImage(
   const textPart = { text: prompt };
   
   const ai = getAiClient();
-  const response: GenerateContentResponse = await generateWithRetry(() => ai.models.generateContent({
-    model: imageEditModel,
-    contents: { parts: [...imageParts, textPart] },
-    config: {
-        responseModalities: [Modality.IMAGE, Modality.TEXT],
-        imageConfig: {
-            imageSize: '4K',
-            ...(aspectRatio ? { aspectRatio } : {})
-        },
-        ...(seed !== undefined ? { seed } : {})
-    },
-  }));
+  const { response } = await generateImageEditWithFallback(ai, { parts: [...imageParts, textPart] }, aspectRatio, seed);
 
   const editedImagePart = response.candidates?.[0]?.content?.parts?.find(part => part.inlineData);
   if (editedImagePart?.inlineData) {
     return editedImagePart.inlineData.data;
   }
   
-  const textResponse = response.text?.trim();
+  const textResponse = getResponseText(response);
   console.error("Image generation failed. Model response:", textResponse);
   throw new Error(`AI failed to return an edited image. Reason: ${textResponse || "No reason provided."}`);
 }

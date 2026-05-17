@@ -438,7 +438,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({ activeTarget, allTargets, 
           id="target-image-input"
           ref={inputRef}
           type="file"
-          accept="image/png, image/jpeg, image/webp, image/tiff"
+          accept="image/*"
           className="hidden"
           onChange={handleFileChange}
           multiple
