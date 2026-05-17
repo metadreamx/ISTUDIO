@@ -13,6 +13,8 @@ const gemini = read('services/geminiService.ts');
 const style = read('components/StyleTransferView.tsx');
 const uploader = read('components/ImageUploader.tsx');
 const mainPanel = read('components/MainPanel.tsx');
+const css = read('index.css');
+const indexHtml = read('index.html');
 const sw = read('public/sw.js');
 const server = read('server.ts');
 const worker = read('worker/gemini-relay.js');
@@ -119,6 +121,15 @@ assert(
   'Single active edits must keep high-fidelity single-image quality even when more targets are loaded.',
 );
 
+assert(
+  style.includes("evaluateRealism(newImageBase64") &&
+  style.includes("AUTOMATIC REALISM REPAIR PASS") &&
+  style.includes("NO WASHED-OUT COMPOSITE") &&
+  gemini.includes("sticker-like edges") &&
+  gemini.includes("washed-out tones"),
+  'Generation must include the realism repair pass and anti-sticker/anti-washout guidance.',
+);
+
 const referenceInputIndex = style.indexOf("const referenceInput = await imageToGeminiInput(referenceImage, qualityMode)");
 const referencePushIndex = style.indexOf("inlineData: { data: referenceInput.base64, mimeType: referenceInput.mimeType }");
 const customInputIndex = style.indexOf("const activeItemInputs = await Promise.all");
@@ -130,6 +141,25 @@ assert(
 assert(
   uploader.match(/accept=\"image\/\*\"/g)?.length === 2 && mainPanel.includes('accept="image/*"'),
   'Reference and target uploaders must accept browser-decodable mobile formats such as iPhone HEIC.',
+);
+
+assert(
+  indexHtml.includes("user-scalable=no") &&
+  indexHtml.includes("maximum-scale=1") &&
+  indexHtml.includes("viewport-fit=cover") &&
+  css.includes("height: 100svh") &&
+  css.includes("body {\n    position: fixed;") &&
+  css.includes("overscroll-behavior: none"),
+  'Mobile app shell must lock to the phone viewport without page zoom or page scrolling.',
+);
+
+assert(
+  mainPanel.includes("mobile-generate-row") &&
+  mainPanel.includes("Original") &&
+  mainPanel.includes("Result") &&
+  mainPanel.includes("lg:hidden") &&
+  mainPanel.includes("lg:flex-row"),
+  'Mobile bottom dock must keep Original/Result visible and place Generate/Refine in a lower mobile row.',
 );
 
 assert(

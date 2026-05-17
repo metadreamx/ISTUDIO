@@ -959,13 +959,15 @@ I am providing you with two images:
 Your task is to evaluate the REALISM of the generated image (Image 2).
 Focus on:
 - Lighting match (do the shadows and highlights make sense in the new environment?)
+- Exposure and contrast match (does the subject look washed out, flat, or disconnected from the scene?)
 - Grounding (does the subject look like they are floating, or are they planted firmly?)
-- Edge blending (are there harsh cut-out lines or halos?)
+- Edge blending (are there harsh cut-out lines, sticker-like edges, halos, or missing light wrap?)
+- Color harmony (does the scene color spill naturally onto subject edges without making the whole subject transparent?)
 - Scale and perspective (does the subject's size make sense?)
 
 Respond with ONLY ONE of the following two phrases:
 "realistic" - if the image looks like a genuine, unedited photograph with good compositing.
-"slightly off" - if there are noticeable compositing errors, floating subjects, mismatched lighting, or AI artifacts.
+"slightly off" - if there are noticeable compositing errors, washed-out tones, sticker-like edges, floating subjects, mismatched lighting, or AI artifacts.
 `;
 
     const response = await generateAnalysis(

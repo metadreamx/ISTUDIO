@@ -6,7 +6,7 @@ import type { ImageState, StyleCategory, HistoryItem, BatchImage, CustomClothing
 import { ImageUploader } from './ImageUploader';
 import { MainPanel } from './MainPanel';
 import { StyleChecklist } from './StyleChecklist';
-import { analyzeTargetImageDetails, editImage, detectTransferableElements, analyzeClothingImage, analyzeAccessoryImage, analyzeFaceImage, analyzeBackgroundImage, analyzeSkyImage, analyzeReferenceScene } from '../services/geminiService';
+import { analyzeTargetImageDetails, editImage, detectTransferableElements, analyzeClothingImage, analyzeAccessoryImage, analyzeFaceImage, analyzeBackgroundImage, analyzeSkyImage, analyzeReferenceScene, evaluateRealism, processImageDataUrl } from '../services/geminiService';
 import { getTetherStatus, saveProjectAsset, selectTetherFolder, startTetherSession, stopTetherSession } from '../services/db';
 import { getImageSrc, hasImageSource, imageToGeminiInput } from '../services/imageAssets';
 import { SparklesIcon, XCircleIcon, CheckIcon, LockIcon, HistoryIcon, DownloadIcon, ChevronDownIcon } from '@/components/icons';
@@ -1491,13 +1491,15 @@ ${anchorSceneInstruction}
 1.  **SUBJECT-LIT OUTPAINTING & ULTIMATE REALISM (TOP PRIORITY):**
     - **SUBJECT LIGHTING IS THE SOURCE OF TRUTH:** The target subject already contains the correct key light, fill, shadow side, rim light, skin/clothing color temperature, and catchlights. Infer the environment that would naturally create this lighting, then generate that environment around the subject.
     - **REFERENCE DNA SCENE BUILD:** Replace or restyle the environment using the Reference DNA, custom background, custom sky, and selected controls while keeping the target subject's identity, anatomy, pose, and framing stable.
-    - **NO CUT-OUT LOOK:** The generated image must blend the subject and environment in-camera with realistic light wrap, edge atmosphere, color bleed, shadows, and occlusion.
+    - **NO CUT-OUT OR STICKER LOOK:** The generated image must blend the subject and environment in-camera with realistic light wrap, edge atmosphere, color bleed, shadows, and occlusion. The subject must never look pasted on top of a background, outlined, semi-transparent, or separated by a halo.
+    - **NO WASHED-OUT COMPOSITE:** Preserve natural contrast, black point, white point, skin tone depth, fabric texture, and camera sharpness. Do not flatten the subject with gray haze, milky exposure, low-contrast blending, or over-smoothed relighting.
     - **GROUNDING & PLACEMENT:** The subject must be perfectly grounded in the scene. No floating subjects. You MUST generate appropriate contact shadows that match the scene's lighting direction and quality.
     - **SCALE & PERSPECTIVE:** Preserve the subject's original scale, position, and framing from Image 1. Match the generated environment to the subject's camera angle and focal length; never scale the subject to fit the environment.
     - **LIGHTING MATCH:** The environmental lighting MUST perfectly match the lighting already visible on the subject. Replicate the subject's light direction, quality (soft/hard), color temperature, shadow side, and ambient bounce light in the generated scene.
     - **REFLECTIONS & SPECULARITY:** Generate realistic reflections of the environment on all appropriate surfaces: eyes, skin (subtle specularity), water, glass, metallic objects, and polished floors. Reflections must be geometrically accurate based on the scene's layout.
     - **ENVIRONMENTAL "STUFF" & ATMOSPHERE:** Include subtle environmental details that enhance photorealism: micro-dust particles in light beams, realistic atmospheric haze, subtle lens flares (if looking towards light), and realistic texture interactions (e.g., wetness, dirt, or fabric grain).
-    - **SEAMLESS BLENDING:** Edges must blend naturally without halos or cut-out artifacts. Match the depth of field and film grain/noise of the environment perfectly.
+    - **SEAMLESS BLENDING:** Edges must blend naturally without halos or cut-out artifacts. Match the depth of field and film grain/noise of the environment perfectly. Apply light wrap only at natural edge zones; do not make the entire subject translucent.
+    - **TONAL MATCH:** Match the subject and scene black/white points, local contrast, color temperature, and ambient bounce so the result reads as one photograph instead of a composited sticker.
 
 2.  **ABSOLUTE BATCH CONSISTENCY (CRITICAL PRIORITY):**
     - **SCENE LOCK:** This generation is part of a batch. You MUST maintain absolute consistency with the Reference Visual DNA. The lighting, blending, and scene environment MUST look identical to any other image generated with this reference.
@@ -1541,6 +1543,7 @@ Before outputting, verify:
 4. Does the atmosphere and lighting perfectly match the Reference DNA? If no, FAIL.
 5. Is the scene environment completely consistent with the Reference Blueprint? If no, FAIL.
 6. Are fine details sharp and camera-quality at the highest supported output size? If no, FAIL.
+7. Does the subject look pasted, washed out, haloed, semi-transparent, or sticker-like? If yes, FAIL.
 `;
         if (cancelGenerationRef.current) throw new Error("Cancelled");
         
@@ -1589,8 +1592,45 @@ Before outputting, verify:
         }
 
         const seed = (isStatefulIteration && sessionSeed) ? sessionSeed : Math.floor(Math.random() * 1000000);
-        const newImageBase64 = await editImage(imageParts, prompt, aspectRatio, seed);
+        let newImageBase64 = await editImage(imageParts, prompt, aspectRatio, seed);
         if (cancelGenerationRef.current) throw new Error("Cancelled");
+
+        const realismResult = await evaluateRealism(newImageBase64, 'image/png', targetInput.base64, targetInput.mimeType);
+        if (cancelGenerationRef.current) throw new Error("Cancelled");
+        if (realismResult === 'slightly off') {
+          try {
+            const previousAttempt = await processImageDataUrl(`data:image/png;base64,${newImageBase64}`, 'previous-reference-edit.png', 'batch');
+            if (previousAttempt.base64 && previousAttempt.mimeType) {
+              const repairPrompt = `${prompt}
+
+**AUTOMATIC REALISM REPAIR PASS**
+The last image input is the previous generated attempt. It was rejected because the subject/background integration looked visibly composited.
+
+Repair the image now:
+- Keep the Target Image subject pose, identity, scale, and crop locked.
+- Keep the selected Reference DNA and requested background/style changes.
+- Remove any sticker-like edge, halo, pasted cutout, washed-out haze, or flat gray exposure.
+- Rebuild the scene lighting so the background looks physically lit by the same key/fill/rim direction already visible on the subject.
+- Add believable contact shadows, natural edge light wrap, local ambient color spill, matching black/white points, matching grain, and matching depth of field.
+- Preserve crisp Canon-quality fine detail in hair, eyes, teeth, jewelry, fabric, fingers, nails, and skin texture.
+- Do not make the whole subject transparent or blurry. Only the natural edge transition should receive subtle atmospheric integration.
+
+Return one polished final image that looks like a single in-camera photograph.`;
+              newImageBase64 = await editImage(
+                [...imageParts, { inlineData: { data: previousAttempt.base64, mimeType: previousAttempt.mimeType } }],
+                repairPrompt,
+                aspectRatio,
+                seed + 1,
+              );
+              if (cancelGenerationRef.current) throw new Error("Cancelled");
+            }
+          } catch (repairError) {
+            if (repairError instanceof Error && repairError.message === "Cancelled") {
+              throw repairError;
+            }
+            console.warn('Realism repair pass did not complete; using first generated result.', repairError);
+          }
+        }
 
         const outputFileName = `${(imageToProcess.target.fileName || 'istudio-output').replace(/\.[^/.]+$/, '')}-reference-edit.png`;
         const storedOutput = await persistProjectImage({

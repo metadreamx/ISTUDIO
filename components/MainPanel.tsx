@@ -591,8 +591,8 @@ export const MainPanel: React.FC<MainPanelProps> = ({
         />
 
         {activeTarget && (
-          <div className="mobile-editor-dock no-scrollbar relative z-40 flex min-h-[58px] shrink-0 items-center justify-between gap-2 overflow-x-auto border-t border-[var(--color-border)] bg-[var(--color-header)] px-2 py-2 text-[var(--color-text-muted)] backdrop-blur-xl sm:px-5 md:min-h-[60px]">
-            <div className="flex shrink-0 items-center gap-2 overflow-x-auto no-scrollbar py-1">
+          <div className="mobile-editor-dock no-scrollbar relative z-40 flex shrink-0 flex-col justify-between gap-2 overflow-hidden border-t border-[var(--color-border)] bg-[var(--color-header)] px-2 py-2 text-[var(--color-text-muted)] backdrop-blur-xl sm:px-5 lg:min-h-[60px] lg:flex-row lg:items-center lg:overflow-x-auto">
+            <div className="flex w-full shrink-0 items-center gap-2 overflow-x-auto no-scrollbar py-1 lg:w-auto">
                 <button
                     onClick={() => inputRef.current?.click()}
                     className="btn-secondary flex h-10 items-center gap-2 px-3 py-2 text-xs"
@@ -601,7 +601,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({
                     <PlusIcon className="w-3.5 h-3.5" />
                     <span>Add</span>
                 </button>
-                <div className="hidden items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1 sm:flex">
+                <div className="flex shrink-0 items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1">
                   <button
                     onClick={() => { setViewMode('single'); setActiveImage('target'); }}
                     className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${viewMode === 'single' && activeImage === 'target' ? 'bg-[var(--color-accent)] text-black' : 'text-[var(--color-text-muted)] hover:text-white'}`}
@@ -616,9 +616,19 @@ export const MainPanel: React.FC<MainPanelProps> = ({
                     Result
                   </button>
                 </div>
+                <Tooltip text="Export current image or finished batch.">
+                  <button
+                    onClick={() => setIsDownloadModalOpen(true)}
+                    disabled={!activeTarget?.generated && allTargets.filter(t => t.status === 'done').length === 0}
+                    className="btn-secondary ml-auto flex h-10 shrink-0 items-center gap-2 px-3 py-2 text-xs disabled:opacity-30 lg:hidden"
+                  >
+                    <DownloadIcon className="w-3.5 h-3.5" />
+                    <span>Export</span>
+                  </button>
+                </Tooltip>
             </div>
 
-            <div className="flex min-w-[150px] flex-1 shrink-0 justify-center py-1 lg:hidden">
+            <div className="mobile-generate-row flex w-full shrink-0 justify-center lg:hidden">
               {isProcessing ? (
                 <button
                   onClick={onCancelGeneration}
@@ -639,7 +649,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({
               )}
             </div>
 
-            <div className="hidden shrink-0 items-center gap-2 py-1 md:flex">
+            <div className="hidden shrink-0 items-center gap-2 py-1 lg:flex">
               <span className="hidden text-xs font-medium text-[var(--color-text-muted)] sm:inline">Zoom {Math.round(zoomLevel * 100)}%</span>
               <div className="flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1">
                   <button onClick={handleZoomOut} className="rounded-md p-2 transition-colors hover:bg-[var(--color-surface-hover)] hover:text-white" aria-label="Zoom out"><ZoomOutIcon className="w-3.5 h-3.5" /></button>
@@ -651,9 +661,9 @@ export const MainPanel: React.FC<MainPanelProps> = ({
               </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2 py-1">
+            <div className="hidden shrink-0 items-center gap-2 py-1 lg:flex">
               <Tooltip text="Reset view">
-                  <button onClick={handleResetTransform} className="btn-secondary hidden h-9 w-9 items-center justify-center p-0 md:flex" aria-label="Reset view">
+                  <button onClick={handleResetTransform} className="btn-secondary flex h-9 w-9 items-center justify-center p-0" aria-label="Reset view">
                     <ResetIcon className="w-3.5 h-3.5" />
                   </button>
               </Tooltip>
