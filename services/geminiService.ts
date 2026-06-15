@@ -2,9 +2,25 @@
 import { GoogleGenAI, Type, type GenerateContentConfig, type GenerateContentResponse } from "@google/genai";
 import type { StyleCategory, ImageState, StyleSubItem, AspectRatio } from '../types';
 
-export const GEMINI_ANALYSIS_MODELS = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.0-flash'] as const;
-export const GEMINI_IMAGE_EDIT_MODELS = ['gemini-2.5-flash-image', 'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview'] as const;
+export const GEMINI_ANALYSIS_MODELS = ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.0-flash'] as const;
+export const GEMINI_IMAGE_EDIT_MODELS = ['gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image'] as const;
 const GEMINI_IMAGE_SIZES = ['4K', '2K', '1K'] as const;
+const GEMINI_ASPECT_RATIOS: AspectRatio[] = [
+  '1:8',
+  '1:4',
+  '9:16',
+  '2:3',
+  '3:4',
+  '4:5',
+  '1:1',
+  '5:4',
+  '4:3',
+  '3:2',
+  '16:9',
+  '21:9',
+  '4:1',
+  '8:1',
+];
 
 type GeminiContentPart = { inlineData: { data: string; mimeType: string } } | { text: string };
 type GeminiContentPayload = {
@@ -468,7 +484,21 @@ async function generateImageEditWithFallback(
   throw toUserFacingGeminiError(lastError || new Error('No Gemini image generation model was available.'));
 }
 
-export type EditImageQualityMode = 'single' | 'batch';
+export type EditImageQualityMode = 'single' | 'batch' | 'reference';
+
+export function closestGeminiAspectRatio(width?: number | null, height?: number | null): AspectRatio | undefined {
+  if (!width || !height || width <= 0 || height <= 0) return undefined;
+  const targetRatio = width / height;
+  return GEMINI_ASPECT_RATIOS.reduce((closest, candidate) => {
+    const [candidateWidth, candidateHeight] = candidate.split(':').map(Number);
+    const candidateRatio = candidateWidth / candidateHeight;
+    const [closestWidth, closestHeight] = closest.split(':').map(Number);
+    const closestRatio = closestWidth / closestHeight;
+    return Math.abs(Math.log(candidateRatio / targetRatio)) < Math.abs(Math.log(closestRatio / targetRatio))
+      ? candidate
+      : closest;
+  }, GEMINI_ASPECT_RATIOS[0]);
+}
 
 const SUPPORTED_GEMINI_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -499,6 +529,11 @@ const EDIT_IMAGE_LIMITS: Record<EditImageQualityMode, { maxLongEdge: number; max
     maxLongEdge: 3072,
     maxMegapixels: 10,
     maxInlineBytes: 5 * 1024 * 1024,
+  },
+  reference: {
+    maxLongEdge: 1600,
+    maxMegapixels: 2.5,
+    maxInlineBytes: 2.2 * 1024 * 1024,
   },
 };
 
@@ -646,14 +681,34 @@ export async function processAndResizeImage(file: File, mode: EditImageQualityMo
     });
 }
 
-export async function detectTransferableElements(base64Image: string, mimeType = 'image/jpeg'): Promise<StyleCategory[]> {
-    const base64Hash = await hashString(base64Image);
-    const cacheKey = `gemini_cache_detectTransferableElements_${base64Hash}`;
+export async function detectTransferableElements(
+  base64Image: string,
+  mimeType = 'image/jpeg',
+  supportingImages: Array<{ base64: string; mimeType: string }> = [],
+  creativeDirection = '',
+): Promise<StyleCategory[]> {
+    const referenceInputs = [{ base64: base64Image, mimeType }, ...supportingImages];
+    const referenceHashes = await Promise.all(referenceInputs.map((image) => hashString(image.base64)));
+    const directionHash = creativeDirection.trim() ? await hashString(creativeDirection.trim()) : 'no-direction';
+    const cacheKey = `gemini_cache_detectTransferableElements_multi_v1_${referenceHashes.join('_')}_${directionHash}`;
     const cachedResult = getFromCache(cacheKey);
     if (cachedResult) return cachedResult;
 
-    const imagePart = fileToGenerativePart(base64Image, mimeType);
-    const prompt = `Analyze the provided reference image with microscopic detail. Your objective is to deconstruct its visual DNA into a comprehensive, categorized list of every transferable stylistic and content element. You must identify specific, direct elements (e.g., specific patterns, lighting setups, color combinations, textures) that can be directly mapped and transferred. Do not just describe concepts or ideas; extract the concrete visual components that constitute the style. Be exhaustive.
+    const imageParts = referenceInputs.map((image) => fileToGenerativePart(image.base64, image.mimeType));
+    const prompt = `Analyze the provided ${referenceInputs.length === 1 ? 'reference image' : `${referenceInputs.length} reference images`} with microscopic detail. Your objective is to synthesize their shared visual DNA into a comprehensive, categorized list of transferable stylistic and content elements.
+
+${referenceInputs.length > 1 ? `MULTI-REFERENCE RULES:
+- Image 1 is the primary reference and has the strongest influence on composition and scene identity.
+- Images 2-${referenceInputs.length} are supporting references. Use them to clarify recurring lighting, palette, material, atmosphere, lens, texture, and finishing choices.
+- Prefer traits repeated across several references.
+- When references differ, create one coherent style direction rather than mixing incompatible scenes literally.
+- Do not copy people, faces, poses, logos, or text from any reference.` : ''}
+
+${creativeDirection.trim() ? `USER CREATIVE DIRECTION:
+"${creativeDirection.trim()}"
+Use this direction to decide which reference traits matter most. It may emphasize, combine, or suppress visual traits, but it is not permission to alter the target subject.` : ''}
+
+Identify specific, direct elements (e.g., specific patterns, lighting setups, color combinations, textures) that can be directly mapped and transferred. Do not just describe concepts or ideas; extract the concrete visual components that constitute the style. Be exhaustive.
 
 For each element you identify, provide:
 1.  A concise 'label'.
@@ -713,7 +768,7 @@ Return the result as a JSON object that strictly adheres to the provided schema.
     };
 
     const response = await generateAnalysis(
-      { parts: [imagePart, { text: prompt }] },
+      { parts: [...imageParts, { text: prompt }] },
       {
           responseMimeType: "application/json",
           responseSchema: schema,
@@ -753,15 +808,25 @@ Return the result as a JSON object that strictly adheres to the provided schema.
 /**
  * Analyzes a reference image to create a scene blueprint for consistency.
  */
-export async function analyzeReferenceScene(base64Image: string, mimeType = 'image/jpeg'): Promise<string> {
-  const base64Hash = await hashString(base64Image);
-  const cacheKey = `gemini_cache_analyzeReferenceScene_${base64Hash}`;
+export async function analyzeReferenceScene(
+  base64Image: string,
+  mimeType = 'image/jpeg',
+  supportingImages: Array<{ base64: string; mimeType: string }> = [],
+  creativeDirection = '',
+): Promise<string> {
+  const referenceInputs = [{ base64: base64Image, mimeType }, ...supportingImages];
+  const referenceHashes = await Promise.all(referenceInputs.map((image) => hashString(image.base64)));
+  const directionHash = creativeDirection.trim() ? await hashString(creativeDirection.trim()) : 'no-direction';
+  const cacheKey = `gemini_cache_analyzeReferenceScene_multi_v1_${referenceHashes.join('_')}_${directionHash}`;
   const cachedResult = getFromCache(cacheKey);
   if (cachedResult) return cachedResult;
 
-  const imagePart = fileToGenerativePart(base64Image, mimeType);
-  const prompt = `Perform a deep forensic analysis of this reference image to extract its "Visual DNA" and "Spatial Blueprint". 
+  const imageParts = referenceInputs.map((image) => fileToGenerativePart(image.base64, image.mimeType));
+  const prompt = `Perform a deep forensic analysis of ${referenceInputs.length === 1 ? 'this reference image' : `these ${referenceInputs.length} reference images`} to extract one coherent "Visual DNA" and "Spatial Blueprint".
   Your goal is to provide a technical specification that allows another artist to perfectly replicate the look, feel, and layout.
+
+  ${referenceInputs.length > 1 ? `Treat Image 1 as the primary composition and scene reference. Treat the remaining images as supporting evidence for repeated lighting, palette, atmosphere, material, lens, and finishing choices. Resolve contradictions into a single believable photographic direction instead of creating a collage.` : ''}
+  ${creativeDirection.trim() ? `The user's creative direction is: "${creativeDirection.trim()}". Use it to prioritize the relevant traits from the references and explicitly describe how those traits should be combined.` : ''}
   
   Focus on:
   - **Atmospheric DNA:** Describe the exact "feel" of the air (haze, clarity, humidity, dust, light rays).
@@ -773,7 +838,7 @@ export async function analyzeReferenceScene(base64Image: string, mimeType = 'ima
   
   This blueprint is the "Source of Truth" for the scene. Be forensic, technical, and exhaustive.`;
 
-  const response = await generateAnalysis({ parts: [imagePart, { text: prompt }] }, undefined, 'reference scene analysis');
+  const response = await generateAnalysis({ parts: [...imageParts, { text: prompt }] }, undefined, 'reference scene analysis');
 
   const result = getResponseText(response);
   saveToCache(cacheKey, result);
@@ -948,35 +1013,52 @@ export async function analyzeTwinImages(images: ImageState[]): Promise<string> {
 /**
  * Edits an image based on a detailed text prompt using the image-in, image-out model.
  */
-export async function evaluateRealism(generatedBase64: string, generatedMimeType: string, targetBase64: string, targetMimeType: string): Promise<'realistic' | 'slightly off'> {
+export async function evaluateRealism(
+  generatedBase64: string,
+  generatedMimeType: string,
+  targetBase64: string,
+  targetMimeType: string,
+  referenceBase64?: string,
+  referenceMimeType?: string,
+  transferContract?: string,
+): Promise<'realistic' | 'slightly off'> {
   try {
+    const hasReference = Boolean(referenceBase64 && referenceMimeType);
     const prompt = `
 You are an expert photography and compositing judge.
-I am providing you with two images:
+I am providing you with ${hasReference ? 'three' : 'two'} images:
 1. The original target image (Image 1)
-2. The generated composite image (Image 2)
+${hasReference ? '2. The reference DNA image that should guide the new lighting, background, mood, color, and finish\n3. The generated composite image to judge' : '2. The generated composite image to judge'}
 
-Your task is to evaluate the REALISM of the generated image (Image 2).
+Your task is to evaluate the REALISM, REFERENCE DNA TRANSFER, and SUBJECT CONSISTENCY of the generated image.
 Focus on:
 - Lighting match (do the shadows and highlights make sense in the new environment?)
+- Reference transfer (does the background, lighting quality, mood, color grade, and atmosphere follow the reference where requested?)
+- Subject consistency (does the target subject keep the same identity, pose, eyes, teeth, hands, nails, jewelry, skin texture, clothing, and camera detail?)
 - Exposure and contrast match (does the subject look washed out, flat, or disconnected from the scene?)
 - Grounding (does the subject look like they are floating, or are they planted firmly?)
 - Edge blending (are there harsh cut-out lines, sticker-like edges, halos, or missing light wrap?)
 - Color harmony (does the scene color spill naturally onto subject edges without making the whole subject transparent?)
 - Scale and perspective (does the subject's size make sense?)
+- Frame lock (does the generated image keep Image 1's exact orientation, crop, horizon, camera framing, subject coordinates, and negative space without zooming, recentering, expanding, or trimming the canvas?)
+- Fine detail (does it preserve sharp hair, fabric weave, skin texture, jewelry, and natural camera grain?)
+
+${transferContract ? `Requested transfer contract:\n${transferContract}` : ''}
 
 Respond with ONLY ONE of the following two phrases:
 "realistic" - if the image looks like a genuine, unedited photograph with good compositing.
-"slightly off" - if there are noticeable compositing errors, washed-out tones, sticker-like edges, floating subjects, mismatched lighting, or AI artifacts.
+"slightly off" - if there are noticeable compositing errors, weak reference transfer, subject drift, any crop/reframe/zoom/position change, washed-out tones, sticker-like edges, floating subjects, mismatched lighting, or AI artifacts.
 `;
+    const imageParts = [
+      { inlineData: { data: targetBase64, mimeType: targetMimeType } },
+      ...(hasReference ? [{ inlineData: { data: referenceBase64!, mimeType: referenceMimeType! } }] : []),
+      { inlineData: { data: generatedBase64, mimeType: generatedMimeType } },
+      { text: prompt },
+    ];
 
     const response = await generateAnalysis(
       {
-        parts: [
-          { inlineData: { data: targetBase64, mimeType: targetMimeType } },
-          { inlineData: { data: generatedBase64, mimeType: generatedMimeType } },
-          { text: prompt }
-        ],
+        parts: imageParts,
       },
       {
         temperature: 0.1,

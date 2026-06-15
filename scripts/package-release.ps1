@@ -4,7 +4,8 @@ param(
   [string]$ReleaseTag = "",
   [string]$NodeVersion = "22.15.0",
   [switch]$SkipChecks,
-  [switch]$SkipPortableNode
+  [switch]$SkipPortableNode,
+  [switch]$SkipProAiPack
 )
 
 $ErrorActionPreference = "Stop"
@@ -132,6 +133,7 @@ $stageRoot = Join-Path $releaseDir "stage"
 $appStage = Join-Path $stageRoot "ISTUDIO"
 $zipPath = Join-Path $releaseDir "ISTUDIO-windows.zip"
 $batPath = Join-Path $releaseDir "INSTALL-ISTUDIO.bat"
+$proAiZipPath = Join-Path $releaseDir "ISTUDIO-ProTools-windows.zip"
 
 Push-Location $root
 try {
@@ -158,6 +160,7 @@ try {
 
   $items = @(
     "README.md",
+    "THIRD_PARTY_NOTICES.md",
     "docs\assets",
     "dist",
     "dist-server",
@@ -235,6 +238,10 @@ try {
 
   Write-ReleaseInstaller -Source (Join-Path $root "LAUNCH ISTUDIO.bat") -Destination $batPath -Repo $Repo -ReleaseTag $ReleaseTag -PackageZip $zipPath
 
+  if (-not $SkipProAiPack) {
+    & (Join-Path $root "scripts\package-pro-ai.ps1") -OutputZip $proAiZipPath -SkipExisting
+  }
+
   $staleReleaseAssets = @(
     "ISTUDIO.bat",
     "ISTUDIO.exe",
@@ -257,6 +264,9 @@ try {
   Write-Host ""
   Write-Host "Release package created:" -ForegroundColor Green
   Write-Host ("  " + $batPath)
+  if (Test-Path $proAiZipPath) {
+    Write-Host ("  " + $proAiZipPath)
+  }
 } finally {
   Pop-Location
 }

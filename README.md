@@ -7,7 +7,9 @@ ISTUDIO is a Windows-first creative app for reference-based photo editing. Use o
 ## What ISTUDIO Does
 
 - **Reference Edit**: edit target photos from the lighting, background, mood, color, and style DNA of a reference image.
+- **Gemini 3.5 visual analysis**: reads reference DNA, target lighting, spatial layout, and realism checks with Gemini 3.5, while dedicated Gemini image models handle final image output.
 - **High-detail output**: keeps the target photo's crop, aspect ratio, pose, and fine details as intact as possible while requesting the highest supported 4K Gemini output.
+- **Local Pro AI tools**: optional Windows model pack for local shoot culling, transparent cutouts, portrait cleanup, finishing, and high-resolution exports.
 - **Virtual Set**: build a 3D set, tune sky and lighting, render a still, then use it as reference DNA or a virtual background.
 - **Tethered Mode**: watch a camera capture folder and import new photos into a Reference Edit project automatically.
 - **Local projects**: save references, targets, generations, virtual sets, tethered captures, exports, and settings in project folders on your computer.
@@ -64,9 +66,17 @@ Users do not need to install developer tools. The Windows release includes every
 
 Do not use GitHub's green **Code > Download ZIP** button for installation. Regular users should download `INSTALL-ISTUDIO.bat` from Releases.
 
+### Optional Local Pro AI Pack
+
+Inside **Reference Edit > Pro Tools**, Windows users can install the optional Local Pro AI Pack. It downloads beside the installed ISTUDIO folder and adds local culling, background cutout, matte creation, portrait cleanup, finishing, and upscale export tools. It does not install into AppData and it does not upload photos.
+
+The normal ISTUDIO installer stays smaller; the Pro AI Pack is installed only when the user enables those tools.
+
 ## Google API Key Required
 
 ISTUDIO uses Google Gemini for AI image editing. Each user needs to provide their own Google API key before generating or refining images.
+
+ISTUDIO uses Gemini 3.5 for visual DNA reading, target analysis, and realism review. Final image generation still uses Gemini's dedicated image models because Gemini 3.5 Flash currently outputs text only and does not generate images.
 
 The app will ask for the key when it is needed. The key is stored locally in the user's browser/app and is not included with the download. During an AI request, ISTUDIO sends the key only for that request:
 

@@ -20,6 +20,7 @@ models
 ui-overhaul-*.png
 .istudio-release
 *.local
+.codex/
 
 # Editor directories and files
 .vscode/*

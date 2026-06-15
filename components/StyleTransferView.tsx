@@ -1,14 +1,15 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircleIcon, CameraIcon, FolderOpenIcon, PlayIcon, RadioIcon, RefreshCwIcon, SettingsIcon, SquareIcon as StopIcon } from 'lucide-react';
-import type { ImageState, StyleCategory, HistoryItem, BatchImage, CustomClothingItem, CustomAccessoryItem, CustomFaceItem, CustomBackgroundItem, CustomSkyItem, AspectRatio, Project, ProjectStorageMode, TetherCapture, TetherProjectState, TetherStatus } from '../types';
+import { AlertCircleIcon, CameraIcon, FolderOpenIcon, PlayIcon, PlusIcon, RadioIcon, RefreshCwIcon, SquareIcon as StopIcon, WandSparklesIcon, ScissorsIcon, StarIcon, ImageIcon, SlidersHorizontalIcon, MessageSquareTextIcon, Trash2Icon } from 'lucide-react';
+import type { ImageState, StyleCategory, HistoryItem, BatchImage, CustomClothingItem, CustomAccessoryItem, CustomFaceItem, CustomBackgroundItem, CustomSkyItem, AspectRatio, Project, ProjectStorageMode, TetherCapture, TetherProjectState, TetherStatus, ProToolStatus, ProFinishSettings } from '../types';
 import { ImageUploader } from './ImageUploader';
 import { MainPanel } from './MainPanel';
 import { StyleChecklist } from './StyleChecklist';
-import { analyzeTargetImageDetails, editImage, detectTransferableElements, analyzeClothingImage, analyzeAccessoryImage, analyzeFaceImage, analyzeBackgroundImage, analyzeSkyImage, analyzeReferenceScene, evaluateRealism, processImageDataUrl } from '../services/geminiService';
+import { analyzeTargetImageDetails, closestGeminiAspectRatio, editImage, detectTransferableElements, analyzeClothingImage, analyzeAccessoryImage, analyzeFaceImage, analyzeBackgroundImage, analyzeSkyImage, analyzeReferenceScene, evaluateRealism, processAndResizeImage, processImageDataUrl } from '../services/geminiService';
 import { getTetherStatus, saveProjectAsset, selectTetherFolder, startTetherSession, stopTetherSession } from '../services/db';
 import { getImageSrc, hasImageSource, imageToGeminiInput } from '../services/imageAssets';
+import { cullProImage, finishProImage, getProToolStatus, installProAiPack, removeProBackground } from '../services/proTools';
 import { SparklesIcon, XCircleIcon, CheckIcon, LockIcon, HistoryIcon, DownloadIcon, ChevronDownIcon } from '@/components/icons';
 
 // Utility function to get dominant color from an image
@@ -129,6 +130,119 @@ const createInitialSkyItem = (): CustomSkyItem => ({
 
 const REFERENCE_ANALYSIS_TIMEOUT_MS = 75000;
 const COLOR_ANALYSIS_TIMEOUT_MS = 12000;
+const MAX_REFERENCE_IMAGES = 4;
+
+const DEFAULT_FINISH_SETTINGS: ProFinishSettings = {
+  sharpen: 0,
+  denoise: 0,
+  clarity: 0,
+  brightness: 0,
+  saturation: 0,
+};
+
+const normalizeFinishSettings = (settings?: Partial<ProFinishSettings> | null): ProFinishSettings => ({
+  sharpen: Math.max(-100, Math.min(100, Number(settings?.sharpen ?? DEFAULT_FINISH_SETTINGS.sharpen))),
+  denoise: Math.max(-100, Math.min(100, Number(settings?.denoise ?? DEFAULT_FINISH_SETTINGS.denoise))),
+  clarity: Math.max(-100, Math.min(100, Number(settings?.clarity ?? DEFAULT_FINISH_SETTINGS.clarity))),
+  brightness: Math.max(-100, Math.min(100, Number(settings?.brightness ?? DEFAULT_FINISH_SETTINGS.brightness))),
+  saturation: Math.max(-100, Math.min(100, Number(settings?.saturation ?? DEFAULT_FINISH_SETTINGS.saturation))),
+});
+
+const hasFinishAdjustments = (settings: ProFinishSettings) =>
+  Object.values(settings).some((value) => Math.abs(Number(value)) > 0);
+
+const finishPreviewStyleFor = (settings: ProFinishSettings): React.CSSProperties => {
+  const brightness = Math.max(0.35, 1 + settings.brightness / 220);
+  const saturation = Math.max(0, 1 + settings.saturation / 150);
+  const contrast = Math.max(0.35, 1 + settings.clarity / 180);
+  const soften = settings.sharpen < 0 ? Math.min(1.4, Math.abs(settings.sharpen) / 120) : 0;
+  return {
+    filter: [
+      `brightness(${brightness.toFixed(3)})`,
+      `saturate(${saturation.toFixed(3)})`,
+      `contrast(${contrast.toFixed(3)})`,
+      soften > 0 ? `blur(${soften.toFixed(2)}px)` : '',
+    ].filter(Boolean).join(' '),
+  };
+};
+
+const STYLE_TRANSFER_CATEGORY_IDS = [
+  'color_palette',
+  'lighting',
+  'mood_atmosphere',
+  'spatial_dna',
+  'background_elements',
+  'subject_style',
+  'texture_patterns',
+  'post_processing',
+  'camera_lens_effects',
+  'foreground_elements',
+  'medium_emulation',
+];
+
+const CONTENT_MODIFICATION_CATEGORY_IDS = ['hair_style', 'clothing_style', 'accessories', 'subject_additions'];
+
+const CATEGORY_TRANSFER_INTENTS: Record<string, string> = {
+  color_palette: 'Transfer color temperature, saturation, contrast curve, black point, white point, and final grade without washing out the target subject.',
+  lighting: 'Transfer key light direction, fill ratio, rim light, shadow softness, catchlight feel, color spill, contact shadows, and exposure balance.',
+  mood_atmosphere: 'Transfer atmosphere, haze, emotional tone, environmental air, depth feeling, and overall cinematic polish.',
+  spatial_dna: 'Transfer the background layout, depth relationship, camera perspective, foreground/background spacing, and scene structure around the locked subject.',
+  background_elements: 'Replace or restyle the environment while matching subject scale, lens perspective, grounding, shadows, and edge integration.',
+  subject_style: 'Apply rendering finish only where requested while preserving identity, anatomy, pose, face, hands, clothing fit, and camera detail.',
+  texture_patterns: 'Transfer surface texture, grain, material finish, and tactile detail while keeping real photographic detail intact.',
+  post_processing: 'Transfer finishing effects such as film grain, glow, vignette, bloom, contrast, and grade at the requested strength.',
+  camera_lens_effects: 'Transfer lens feel, depth of field, focal length impression, bokeh, flare, and optical polish without changing crop or subject scale.',
+  foreground_elements: 'Add or restyle foreground atmosphere and objects only when they support realistic depth without covering or deforming the subject.',
+  medium_emulation: 'Transfer medium or format feel while keeping the result photorealistic unless the user explicitly selected a non-photo style.',
+  hair_style: 'Modify only the selected hair attributes at the requested strength while preserving the original head shape, hairline, and identity.',
+  clothing_style: 'Modify selected clothing style only at the requested strength while preserving body shape, fabric detail, fit, pose, and natural folds.',
+  accessories: 'Modify selected accessories only at the requested strength while preserving jewelry placement, hands, face, and subject identity.',
+  subject_additions: 'Add selected makeup, tattoos, props, or details only where physically plausible and integrated into the original subject lighting.',
+  text_styles: 'Render selected text only when explicitly requested; otherwise do not add lettering, watermarks, signatures, or random typography.',
+};
+
+const getIntensityBand = (intensity: number) => {
+  if (intensity <= 0) return '0: do not transfer';
+  if (intensity <= 25) return '1-25 subtle';
+  if (intensity <= 50) return '26-50 balanced';
+  if (intensity <= 75) return '51-75 strong';
+  return '76-100 dominant';
+};
+
+const getIntensityInstruction = (intensity: number) => {
+  if (intensity <= 0) return "OFF: Do not transfer this category. Preserve the target image's original characteristics for this category.";
+  if (intensity <= 25) return "SUBTLE: Apply a very light touch. The target image's original characteristics should remain highly dominant.";
+  if (intensity <= 50) return "BALANCED: Blend the style evenly. Noticeable reference influence while retaining the target's core photographic feel.";
+  if (intensity <= 75) return "STRONG: The reference style should be prominent, but subject identity, anatomy, pose, and camera detail remain locked.";
+  return "DOMINANT: Make this reference trait lead the output while still preserving the target subject's identity, geometry, and realism.";
+};
+
+const summarizeCategorySelection = (category: StyleCategory) => {
+  const selected = category.items.filter((item) => item.checked);
+  const labels = selected.map((item) => `${item.label}: ${item.description}`).join('; ');
+  const custom = category.customPrompt ? `Custom instruction: ${category.customPrompt}` : '';
+  return [labels, custom].filter(Boolean).join('; ') || 'No selected cues.';
+};
+
+const buildReferenceTransferMatrix = (categories: StyleCategory[]) => {
+  if (!categories.length) {
+    return '- No reference categories were detected. Preserve the target image unless explicit custom assets are provided.';
+  }
+
+  return categories.map((category) => {
+    const active = category.intensity > 0 && (category.items.some((item) => item.checked) || Boolean(category.customPrompt));
+    const intent = CATEGORY_TRANSFER_INTENTS[category.id] || 'Apply only the selected visual cues while preserving target subject consistency and realism.';
+    return `- ${category.label} (${category.id}): ${category.intensity}% [${getIntensityBand(category.intensity)}] - ${active ? 'ACTIVE' : 'INACTIVE'}. ${getIntensityInstruction(category.intensity)} Intent: ${intent} Selected cues: ${summarizeCategorySelection(category)}`;
+  }).join('\n');
+};
+
+const buildReferenceTransferSummary = (categories: StyleCategory[]) => {
+  const active = categories.filter((category) => category.intensity > 0 && (category.items.some((item) => item.checked) || Boolean(category.customPrompt)));
+  if (!active.length) return 'No active reference categories.';
+  return active
+    .map((category) => `${category.label} ${category.intensity}% (${getIntensityBand(category.intensity)})`)
+    .join('; ');
+};
 
 const withReferenceAnalysisTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -223,6 +337,7 @@ const compactHistoryForSave = (history: HistoryItem[], fallbackReference: ImageS
 
 export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, onUpdateProject, onCreateProject, referenceTemplate, onReferenceTemplateConsumed, storageMode = 'folder' }) => {
   const [referenceImage, setReferenceImage] = useState<ImageState>(createEmptyImage());
+  const [supportingReferenceImages, setSupportingReferenceImages] = useState<ImageState[]>([]);
   const [targetImages, setTargetImages] = useState<BatchImage[]>([]);
   const [generationHistory, setGenerationHistory] = useState<HistoryItem[]>([]);
   const [isGenerationHistoryOpen, setIsGenerationHistoryOpen] = useState(false);
@@ -231,17 +346,18 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [checklist, setChecklist] = useState<StyleCategory[]>([]);
+  const [promptEdit, setPromptEdit] = useState('');
   const [sceneBlueprint, setSceneBlueprint] = useState<string | null>(null);
   const [openCategoryId, setOpenCategoryId] = useState<string | null>(null);
   const [accentColor, setAccentColor] = useState<string | null>(null);
-  const [aspectRatio, setAspectRatio] = useState<AspectRatio | undefined>(undefined);
+  const aspectRatio: AspectRatio | undefined = undefined;
   const [sessionSeed, setSessionSeed] = useState<number | null>(null);
   const [anchorImageId, setAnchorImageId] = useState<string | null>(null);
   const cancelGenerationRef = useRef(false);
   const lastAnalyzedRefBase64 = useRef<string | null>(null);
+  const supportingReferenceInputRef = useRef<HTMLInputElement | null>(null);
   const generationHistoryMenuRef = useRef<HTMLDivElement | null>(null);
   
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(new Set());
   const [tetherStatus, setTetherStatus] = useState<TetherStatus | null>(null);
   const [tetherFolderPath, setTetherFolderPath] = useState('');
@@ -252,6 +368,12 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   const importedTetherCaptureIdsRef = useRef<Set<string>>(new Set());
   const isRefreshingTetherStatusRef = useRef(false);
   const isBrowserStorage = storageMode === 'browser';
+  const [proToolStatus, setProToolStatus] = useState<ProToolStatus | null>(null);
+  const [isProPanelOpen, setIsProPanelOpen] = useState(false);
+  const [isProToolBusy, setIsProToolBusy] = useState(false);
+  const [proToolMessage, setProToolMessage] = useState<string | null>(null);
+  const [finishSettings, setFinishSettings] = useState<ProFinishSettings>(DEFAULT_FINISH_SETTINGS);
+  const finishSaveTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
 
   // State for custom clothing feature
   const [customClothingItems, setCustomClothingItems] = useState({
@@ -286,8 +408,9 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     const hasCustomFace = [customFaceItems.man, customFaceItems.woman].some((item) => item.enabled && item.status === 'ready');
     const hasCustomBackground = customBackgroundItem.enabled && customBackgroundItem.status === 'ready';
     const hasCustomSky = customSkyItem.enabled && customSkyItem.status === 'ready';
+    const hasPromptEdit = promptEdit.trim().length > 0;
 
-    return hasSelectedCategory || hasCustomClothing || hasCustomAccessory || hasCustomFace || hasCustomBackground || hasCustomSky;
+    return hasSelectedCategory || hasPromptEdit || hasCustomClothing || hasCustomAccessory || hasCustomFace || hasCustomBackground || hasCustomSky;
   }, [
     checklist,
     customAccessoryItems,
@@ -295,14 +418,33 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     customClothingItems,
     customFaceItems,
     customSkyItem,
+    promptEdit,
   ]);
 
-  const canAutoQueueTether = Boolean(hasImageSource(referenceImage) && referenceImage.mimeType && !isAnalyzing && hasReadyGenerationInstructions());
+  const hasPromptEdit = promptEdit.trim().length > 0;
+  const allReferenceImages = [
+    ...(hasImageSource(referenceImage) ? [referenceImage] : []),
+    ...supportingReferenceImages.filter(hasImageSource),
+  ];
+  const hasReferenceSource = allReferenceImages.length > 0;
+  const canAutoQueueTether = Boolean((hasReferenceSource || hasPromptEdit) && !isAnalyzing && hasReadyGenerationInstructions());
 
   // Load project state
   useEffect(() => {
     const state = project?.state || {};
-    const nextReference = state.referenceImage || createEmptyImage();
+    const storedReferences = Array.isArray(state.referenceImages)
+      ? state.referenceImages.filter((image: ImageState) => hasImageSource(image))
+      : [];
+    const nextReference = hasImageSource(state.referenceImage)
+      ? state.referenceImage
+      : storedReferences[0] || createEmptyImage();
+    const nextSupportingReferences = storedReferences
+          .filter((image: ImageState) => (
+            image.assetPath !== nextReference.assetPath
+            && image.assetUrl !== nextReference.assetUrl
+            && image.base64 !== nextReference.base64
+          ))
+          .slice(0, MAX_REFERENCE_IMAGES - 1);
     const restoredHistory: HistoryItem[] = Array.isArray(state.generationHistory)
       ? state.generationHistory
       : [];
@@ -341,14 +483,15 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
           }));
 
     setReferenceImage(nextReference);
+    setSupportingReferenceImages(nextSupportingReferences);
     lastAnalyzedRefBase64.current = nextReference.assetPath || nextReference.assetUrl || nextReference.base64 || null;
     setTargetImages(restoredTargets);
     setGenerationHistory(fallbackHistory);
     setActiveImageIndex(restoredTargets.length > 0 ? 0 : -1);
     setChecklist(Array.isArray(state.checklist) ? state.checklist : []);
+    setPromptEdit(typeof state.promptEdit === 'string' ? state.promptEdit : '');
     setSceneBlueprint(state.sceneBlueprint || null);
     setAccentColor(state.accentColor || null);
-    setAspectRatio(state.aspectRatio || undefined);
     setCustomClothingItems(state.customClothingItems || {
       woman: createInitialItems('clothing', 'woman', 2) as CustomClothingItem[],
       man: createInitialItems('clothing', 'man', 2) as CustomClothingItem[],
@@ -371,6 +514,14 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     setTetherAutoEdit(Boolean(tetherState.autoEdit));
     setTetherProjectMode(project ? 'current' : 'new');
     importedTetherCaptureIdsRef.current = new Set(Array.isArray(tetherState.importedCaptureIds) ? tetherState.importedCaptureIds : []);
+    if (restoredTargets[0]?.finishSettings) {
+      setFinishSettings(normalizeFinishSettings(restoredTargets[0].finishSettings));
+    } else if (state.proWorkflow?.finishSettings && typeof state.proWorkflow.finishSettings === 'object') {
+      setFinishSettings(normalizeFinishSettings(state.proWorkflow.finishSettings));
+    } else {
+      setFinishSettings(DEFAULT_FINISH_SETTINGS);
+    }
+    setProToolMessage(typeof state.proWorkflow?.lastProToolMessage === 'string' ? state.proWorkflow.lastProToolMessage : null);
     setIsGenerationHistoryOpen(false);
     setGenerationStatus('idle');
     setError(null);
@@ -404,8 +555,10 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
   const buildProjectSnapshot = useCallback((overrides: Partial<{
     referenceImage: ImageState;
+    supportingReferenceImages: ImageState[];
     targetImages: BatchImage[];
     checklist: StyleCategory[];
+    promptEdit: string;
     sceneBlueprint: string | null;
     accentColor: string | null;
     aspectRatio: AspectRatio | undefined;
@@ -418,10 +571,12 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     anchorImageId: string | null;
     generationHistory: HistoryItem[];
     tether: TetherProjectState;
+    proWorkflow: Record<string, unknown>;
   }> = {}): Project | null => {
     if (!project) return null;
 
     const nextReferenceImage = overrides.referenceImage ?? referenceImage;
+    const nextSupportingReferenceImages = overrides.supportingReferenceImages ?? supportingReferenceImages;
     const nextTargetImages = overrides.targetImages ?? targetImages;
     const nextGenerationHistory = overrides.generationHistory ?? generationHistory;
     const generatedImages = Array.from(new Set([
@@ -441,11 +596,13 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       state: {
         ...(project.state || {}),
         referenceImage: nextReferenceImage,
+        referenceImages: [nextReferenceImage, ...nextSupportingReferenceImages].filter(hasImageSource),
         targetImages: compactTargetImages,
         checklist: overrides.checklist ?? checklist,
+        promptEdit: overrides.promptEdit ?? promptEdit,
         sceneBlueprint: overrides.sceneBlueprint ?? sceneBlueprint,
         accentColor: overrides.accentColor ?? accentColor,
-        aspectRatio: overrides.aspectRatio ?? aspectRatio,
+        aspectRatio: null,
         customClothingItems: overrides.customClothingItems ?? customClothingItems,
         customAccessoryItems: overrides.customAccessoryItems ?? customAccessoryItems,
         customFaceItems: overrides.customFaceItems ?? customFaceItems,
@@ -454,6 +611,11 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         sessionSeed: overrides.sessionSeed ?? sessionSeed,
         anchorImageId: overrides.anchorImageId ?? anchorImageId,
         generationHistory: compactGenerationHistory,
+        proWorkflow: overrides.proWorkflow ?? {
+          ...(project.state?.proWorkflow || {}),
+          finishSettings,
+          lastProToolMessage: proToolMessage,
+        },
         tether: overrides.tether ?? {
           folderPath: tetherFolderPath || undefined,
           autoEdit: tetherAutoEdit,
@@ -465,8 +627,10 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, [
     project,
     referenceImage,
+    supportingReferenceImages,
     targetImages,
     checklist,
+    promptEdit,
     sceneBlueprint,
     accentColor,
     aspectRatio,
@@ -478,6 +642,8 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     sessionSeed,
     anchorImageId,
     generationHistory,
+    finishSettings,
+    proToolMessage,
     tetherFolderPath,
     tetherAutoEdit,
     tetherStatus?.projectId,
@@ -494,12 +660,13 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   const persistProjectImage = useCallback(async (
     image: ImageState,
     bucket: 'reference' | 'targets' | 'outputs' | 'assets' | 'tether/inbox',
+    matchFrame?: { width: number; height: number },
   ): Promise<ImageState> => {
     if (!project?.id || !image.base64) {
       return image;
     }
     try {
-      return await saveProjectAsset(project.id, image, bucket);
+      return await saveProjectAsset(project.id, image, bucket, matchFrame);
     } catch (error) {
       console.warn(`Could not save ${bucket} image into the project folder.`, error);
       return image;
@@ -514,6 +681,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       const storedReference = await persistProjectImage(referenceTemplate, 'reference');
       if (isCancelled) return;
       setReferenceImage(storedReference);
+      setSupportingReferenceImages([]);
       setChecklist([]);
       setSceneBlueprint(null);
       setAccentColor(null);
@@ -521,6 +689,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       lastAnalyzedRefBase64.current = null;
       saveProjectNow({
         referenceImage: storedReference,
+        supportingReferenceImages: [],
         checklist: [],
         sceneBlueprint: null,
         accentColor: null,
@@ -545,6 +714,25 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   }, [buildProjectSnapshot, onUpdateProject]);
 
   const handleReferenceImageSelect = useCallback(async (nextReferenceImage: ImageState) => {
+    if (!hasImageSource(nextReferenceImage)) {
+      const [promotedReference, ...remainingReferences] = supportingReferenceImages;
+      const nextPrimary = promotedReference || createEmptyImage();
+      setReferenceImage(nextPrimary);
+      setSupportingReferenceImages(remainingReferences);
+      setChecklist([]);
+      setSceneBlueprint(null);
+      setAccentColor(null);
+      setOpenCategoryId(null);
+      lastAnalyzedRefBase64.current = null;
+      saveProjectNow({
+        referenceImage: nextPrimary,
+        supportingReferenceImages: remainingReferences,
+        checklist: [],
+        sceneBlueprint: null,
+        accentColor: null,
+      });
+      return;
+    }
     const storedReferenceImage = await persistProjectImage(nextReferenceImage, 'reference');
     const resetChecklist: StyleCategory[] = [];
     setReferenceImage(storedReferenceImage);
@@ -555,11 +743,76 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     lastAnalyzedRefBase64.current = null;
     saveProjectNow({
       referenceImage: storedReferenceImage,
+      supportingReferenceImages,
       checklist: resetChecklist,
       sceneBlueprint: null,
       accentColor: null,
     });
-  }, [persistProjectImage, saveProjectNow]);
+  }, [persistProjectImage, saveProjectNow, supportingReferenceImages]);
+
+  const handleSupportingReferenceFiles = useCallback(async (files: File[]) => {
+    const availableSlots = Math.max(0, MAX_REFERENCE_IMAGES - 1 - supportingReferenceImages.length);
+    const imageFiles = files.filter((file) => file.type.startsWith('image/')).slice(0, availableSlots);
+    if (imageFiles.length === 0) return;
+
+    const storedReferences: ImageState[] = [];
+    for (const file of imageFiles) {
+      const prepared = await processAndResizeImage(file, 'reference');
+      storedReferences.push(await persistProjectImage(prepared, 'reference'));
+    }
+    const nextReferences = [...supportingReferenceImages, ...storedReferences].slice(0, MAX_REFERENCE_IMAGES - 1);
+    setSupportingReferenceImages(nextReferences);
+    setChecklist([]);
+    setSceneBlueprint(null);
+    setOpenCategoryId(null);
+    lastAnalyzedRefBase64.current = null;
+    saveProjectNow({
+      supportingReferenceImages: nextReferences,
+      checklist: [],
+      sceneBlueprint: null,
+    });
+  }, [persistProjectImage, saveProjectNow, supportingReferenceImages]);
+
+  const handleSupportingReferenceInput = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    void handleSupportingReferenceFiles(files).catch((error) => {
+      setError(error instanceof Error ? error.message : 'Could not add the supporting references.');
+    });
+  }, [handleSupportingReferenceFiles]);
+
+  const handleRemoveSupportingReference = useCallback((index: number) => {
+    const nextReferences = supportingReferenceImages.filter((_, imageIndex) => imageIndex !== index);
+    setSupportingReferenceImages(nextReferences);
+    setChecklist([]);
+    setSceneBlueprint(null);
+    setOpenCategoryId(null);
+    lastAnalyzedRefBase64.current = null;
+    saveProjectNow({
+      supportingReferenceImages: nextReferences,
+      checklist: [],
+      sceneBlueprint: null,
+    });
+  }, [saveProjectNow, supportingReferenceImages]);
+
+  const handleClearReferences = useCallback(() => {
+    const emptyReference = createEmptyImage();
+    setReferenceImage(emptyReference);
+    setSupportingReferenceImages([]);
+    setChecklist([]);
+    setSceneBlueprint(null);
+    setAccentColor(null);
+    setSessionSeed(null);
+    setOpenCategoryId(null);
+    lastAnalyzedRefBase64.current = null;
+    saveProjectNow({
+      referenceImage: emptyReference,
+      supportingReferenceImages: [],
+      checklist: [],
+      sceneBlueprint: null,
+      accentColor: null,
+    });
+  }, [saveProjectNow]);
 
   const handleTargetImagesSelect = useCallback(async (imageStates: ImageState[]) => {
     const newBatchImages: BatchImage[] = await Promise.all(imageStates.map(async (state, index) => {
@@ -596,8 +849,10 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
   const buildStateForNewTetherProject = useCallback((tether: TetherProjectState) => ({
     referenceImage,
+    referenceImages: [referenceImage, ...supportingReferenceImages].filter(hasImageSource),
     targetImages: [],
     checklist,
+    promptEdit,
     sceneBlueprint,
     accentColor,
     aspectRatio,
@@ -619,9 +874,11 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     customClothingItems,
     customFaceItems,
     customSkyItem,
+    promptEdit,
     referenceImage,
     sceneBlueprint,
     sessionSeed,
+    supportingReferenceImages,
   ]);
 
   const refreshTetherStatus = useCallback(async () => {
@@ -664,6 +921,25 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     const timer = window.setInterval(refreshTetherStatus, 3000);
     return () => window.clearInterval(timer);
   }, [isBrowserStorage, refreshTetherStatus]);
+
+  const refreshProToolStatus = useCallback(async () => {
+    try {
+      setProToolStatus(await getProToolStatus());
+    } catch (error) {
+      setProToolStatus({
+        available: false,
+        installed: false,
+        runtimeReady: false,
+        acceleration: 'unavailable',
+        message: error instanceof Error ? error.message : 'Local Pro AI tools are unavailable.',
+        models: [],
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshProToolStatus();
+  }, [refreshProToolStatus]);
 
   const handlePickTetherFolder = useCallback(async () => {
     setIsTetherBusy(true);
@@ -864,12 +1140,21 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
   useEffect(() => {
     let isCancelled = false;
+    let analysisTimer: number | null = null;
 
     const processReferenceImage = async () => {
-      const referenceKey = referenceImage.assetPath || referenceImage.assetUrl || referenceImage.base64 || null;
-      if (referenceKey && referenceImage.mimeType && hasImageSource(referenceImage)) {
+      const references = [
+        ...(hasImageSource(referenceImage) ? [referenceImage] : []),
+        ...supportingReferenceImages.filter(hasImageSource),
+      ].slice(0, MAX_REFERENCE_IMAGES);
+      const referenceKey = references
+        .map((image) => image.assetPath || image.assetUrl || image.base64 || '')
+        .filter(Boolean)
+        .join('|');
+      const analysisKey = `${referenceKey}::${promptEdit.trim()}`;
+      if (referenceKey && references[0]?.mimeType) {
         // Skip analysis if we already have a checklist for this image (e.g. on project load, or replaying the same reference)
-        if (checklist.length > 0 && sceneBlueprint && referenceKey === lastAnalyzedRefBase64.current) {
+        if (checklist.length > 0 && sceneBlueprint && analysisKey === lastAnalyzedRefBase64.current) {
             return;
         }
 
@@ -880,14 +1165,26 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         setOpenCategoryId(null);
         
         try {
-          const analysisImage = await imageToGeminiInput(referenceImage, 'single');
-          if (!analysisImage.base64 || !analysisImage.mimeType) {
+          const analysisImages = await Promise.all(references.map((image) => imageToGeminiInput(image, 'reference')));
+          const [analysisImage, ...supportingAnalysisImages] = analysisImages;
+          if (!analysisImage?.base64 || !analysisImage.mimeType) {
             throw new Error('Could not load the reference image from the project folder.');
           }
+          const supportingInputs = supportingAnalysisImages
+            .filter((image): image is ImageState & { base64: string; mimeType: string } => Boolean(image.base64 && image.mimeType))
+            .map((image) => ({ base64: image.base64, mimeType: image.mimeType }));
           const [itemsResult, colorResult, blueprintResult] = await Promise.allSettled([
-            withReferenceAnalysisTimeout(detectTransferableElements(analysisImage.base64, analysisImage.mimeType), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Visual DNA analysis'),
+            withReferenceAnalysisTimeout(
+              detectTransferableElements(analysisImage.base64, analysisImage.mimeType, supportingInputs, promptEdit.trim()),
+              REFERENCE_ANALYSIS_TIMEOUT_MS,
+              'Visual DNA analysis',
+            ),
             withReferenceAnalysisTimeout(getDominantColor(analysisImage.base64, analysisImage.mimeType), COLOR_ANALYSIS_TIMEOUT_MS, 'Color analysis'),
-            withReferenceAnalysisTimeout(analyzeReferenceScene(analysisImage.base64, analysisImage.mimeType), REFERENCE_ANALYSIS_TIMEOUT_MS, 'Scene blueprint analysis')
+            withReferenceAnalysisTimeout(
+              analyzeReferenceScene(analysisImage.base64, analysisImage.mimeType, supportingInputs, promptEdit.trim()),
+              REFERENCE_ANALYSIS_TIMEOUT_MS,
+              'Scene blueprint analysis',
+            ),
           ]);
           
           if (isCancelled) return;
@@ -908,7 +1205,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
           setAccentColor(color);
           setSceneBlueprint(blueprint);
           setSessionSeed(Math.floor(Math.random() * 1000000));
-          lastAnalyzedRefBase64.current = referenceKey; // Track successful analysis
+          lastAnalyzedRefBase64.current = analysisKey;
           if (itemsWithIntensity.length > 0) {
             setOpenCategoryId(itemsWithIntensity[0].id);
           }
@@ -926,7 +1223,7 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
           setChecklist(fallbackItems);
           setSceneBlueprint(createFallbackReferenceBlueprint());
           setOpenCategoryId(fallbackItems[0]?.id || null);
-          lastAnalyzedRefBase64.current = referenceKey;
+          lastAnalyzedRefBase64.current = analysisKey;
           setError(e instanceof Error ? e.message : "Failed to process reference image. ISTUDIO loaded starter DNA controls instead.");
           setAccentColor(null);
           setSessionSeed(null);
@@ -944,12 +1241,22 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         setIsAnalyzing(false);
       }
     };
-    processReferenceImage();
+    analysisTimer = window.setTimeout(() => {
+      void processReferenceImage();
+    }, promptEdit.trim() ? 850 : 120);
 
     return () => {
       isCancelled = true;
+      if (analysisTimer) window.clearTimeout(analysisTimer);
     };
-  }, [referenceImage.assetPath, referenceImage.assetUrl, referenceImage.base64, referenceImage.mimeType]);
+  }, [
+    promptEdit,
+    referenceImage.assetPath,
+    referenceImage.assetUrl,
+    referenceImage.base64,
+    referenceImage.mimeType,
+    supportingReferenceImages,
+  ]);
 
   const handleCheckChange = useCallback((categoryId: string, subItemId: string, checked: boolean) => {
     setChecklist(prev => prev.map(c => c.id === categoryId ? { ...c, items: c.items.map(i => i.id === subItemId ? { ...i, checked } : i) } : c));
@@ -974,6 +1281,11 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
   const handleCustomPromptChange = useCallback((categoryId: string, value: string) => {
     setChecklist(prev => prev.map(c => c.id === categoryId ? { ...c, customPrompt: value } : c));
   }, []);
+
+  const handlePromptEditChange = useCallback((value: string) => {
+    setPromptEdit(value);
+    saveProjectNow({ promptEdit: value });
+  }, [saveProjectNow]);
 
   const handleToggleAllInCategory = useCallback((categoryId: string, checkAll: boolean) => {
     setChecklist(prev => 
@@ -1145,8 +1457,13 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     }
 
     return {
-      aspectRatio: aspectRatio || null,
+      aspectRatio: null,
       anchorImageId,
+      promptEdit: promptEdit.trim() || undefined,
+      referenceFileNames: [
+        ...(hasImageSource(referenceImage) ? [referenceImage.fileName || 'Primary reference'] : []),
+        ...supportingReferenceImages.filter(hasImageSource).map((image, index) => image.fileName || `Supporting reference ${index + 1}`),
+      ],
       selectedCategories: checklist
         .filter((category) => category.intensity > 0 && (category.items.some((item) => item.checked) || Boolean(category.customPrompt)))
         .map((category) => ({
@@ -1164,6 +1481,9 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
     anchorImageId,
     aspectRatio,
     checklist,
+    promptEdit,
+    referenceImage,
+    supportingReferenceImages,
     customAccessoryItems,
     customBackgroundItem,
     customClothingItems,
@@ -1195,7 +1515,6 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
       setActiveImageIndex(prev.length);
       return [...prev, restoredTarget];
     });
-    setIsMobileSidebarOpen(false);
   }, []);
 
   const handleExportGeneration = useCallback((item: HistoryItem) => {
@@ -1211,7 +1530,13 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
   const runGeneration = useCallback(async (imageIndex: number) => {
     const imageToProcess = targetImages[imageIndex];
-    if (!imageToProcess || !hasImageSource(imageToProcess.target) || !hasImageSource(referenceImage) || !referenceImage.mimeType) {
+    const promptText = promptEdit.trim();
+    const generationReferenceImages = [
+      ...(hasImageSource(referenceImage) ? [referenceImage] : []),
+      ...supportingReferenceImages.filter(hasImageSource),
+    ].slice(0, MAX_REFERENCE_IMAGES);
+    const canUseReference = generationReferenceImages.length > 0;
+    if (!imageToProcess || !hasImageSource(imageToProcess.target) || (!canUseReference && !promptText)) {
         return; 
     }
     
@@ -1225,9 +1550,14 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         if (!targetInput.base64 || !targetInput.mimeType) {
           throw new Error('Could not load the project images for generation.');
         }
-        const referenceInput = await imageToGeminiInput(referenceImage, qualityMode);
-        if (!referenceInput.base64 || !referenceInput.mimeType) {
-          throw new Error('Could not load the reference image for generation.');
+        let loadedReferenceInputs: Awaited<ReturnType<typeof imageToGeminiInput>>[] = [];
+        if (canUseReference) {
+          loadedReferenceInputs = await Promise.all(
+            generationReferenceImages.map((image) => imageToGeminiInput(image, 'reference')),
+          );
+          if (!loadedReferenceInputs[0]?.base64 || !loadedReferenceInputs[0].mimeType) {
+            throw new Error('Could not load the reference image for generation.');
+          }
         }
 
         setGenerationStatus('analyzing_target');
@@ -1236,18 +1566,14 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
         
         setGenerationStatus('generating');
         
-        const STYLE_CATEGORIES = ['color_palette', 'lighting', 'mood_atmosphere', 'spatial_dna', 'background_elements', 'subject_style', 'texture_patterns', 'post_processing', 'camera_lens_effects', 'foreground_elements', 'medium_emulation'];
-        const CONTENT_CATEGORIES = ['hair_style', 'clothing_style', 'accessories', 'subject_additions'];
-        
-        const getIntensityInstruction = (intensity: number) => {
-            if (intensity <= 25) return "SUBTLE: Apply a very light touch. The target image's original characteristics should remain highly dominant.";
-            if (intensity <= 50) return "MODERATE: Blend the style evenly. Noticeable stylistic influence while retaining the target's core feel.";
-            if (intensity <= 75) return "STRONG: The reference style should be highly prominent and override much of the target's original aesthetic.";
-            return "MAXIMUM: Completely saturate the image with this style. The reference style dictates the entire look and feel for this element.";
-        };
+        const transferIntensityMatrix = buildReferenceTransferMatrix(checklist);
+        const transferSummary = [
+          buildReferenceTransferSummary(checklist),
+          promptText ? `Prompt edit: ${promptText}` : '',
+        ].filter(Boolean).join('; ');
 
         const styleCommands = checklist
-            .filter(c => STYLE_CATEGORIES.includes(c.id) && (c.items.some(i => i.checked) || (c.id === 'background_elements' && c.customPrompt)) && c.intensity > 0)
+            .filter(c => STYLE_TRANSFER_CATEGORY_IDS.includes(c.id) && (c.items.some(i => i.checked) || (c.id === 'background_elements' && c.customPrompt)) && c.intensity > 0)
             .map(c => {
                 const itemDescriptions = c.items
                     .filter(i => i.checked)
@@ -1265,7 +1591,9 @@ export const StyleTransferView: React.FC<StyleTransferViewProps> = ({ project, o
 
                 return `---
 **COMMAND: APPLY ${c.label.toUpperCase()}**
-**Intensity: ${c.intensity}%** (${intensityDesc})
+**Slider Intensity: ${c.intensity}%** [${getIntensityBand(c.intensity)}]
+**Intensity Behavior:** ${intensityDesc}
+**Category Effect:** ${CATEGORY_TRANSFER_INTENTS[c.id] || 'Apply this category only through the selected cues while preserving target subject consistency and realism.'}
 **Details:**
 ${details}
 ---`;
@@ -1280,7 +1608,7 @@ ${details}
             return labels.length > 0 ? labels.join(', ') : 'None.';
         };
         
-        const allCategories = [...STYLE_CATEGORIES, ...CONTENT_CATEGORIES];
+        const allCategories = [...STYLE_TRANSFER_CATEGORY_IDS, ...CONTENT_MODIFICATION_CATEGORY_IDS];
         const contentOmissionList = allCategories.map(catId => {
             const category = checklist.find(c => c.id === catId);
             if (!category) return null;
@@ -1302,18 +1630,18 @@ ${details}
         
         const getActiveContentCategory = (categoryId: string): StyleCategory | undefined => {
             const category = checklist.find(c => c.id === categoryId);
-            if (category && CONTENT_CATEGORIES.includes(categoryId) && category.items.some(i => i.checked) && category.intensity > 0) {
+            if (category && CONTENT_MODIFICATION_CATEGORY_IDS.includes(categoryId) && category.items.some(i => i.checked) && category.intensity > 0) {
                 return category;
             }
             return undefined;
         };
         
-        CONTENT_CATEGORIES.forEach(catId => {
+        CONTENT_MODIFICATION_CATEGORY_IDS.forEach(catId => {
             const activeCategory = getActiveContentCategory(catId);
             if(activeCategory) {
                  const items = activeCategory.items.filter(i => i.checked).map(i => i.label).join(', ');
                  const intensityDesc = getIntensityInstruction(activeCategory.intensity);
-                 let instruction = `- **CONTENT MODIFICATION: APPLY ${activeCategory.label.toUpperCase()}:** You are authorized to modify this content. Apply the following styles at ${activeCategory.intensity}% intensity (${intensityDesc}): ${items}.`;
+                 let instruction = `- **CONTENT MODIFICATION: APPLY ${activeCategory.label.toUpperCase()}:** You are authorized to modify this content. Apply the following styles at ${activeCategory.intensity}% intensity [${getIntensityBand(activeCategory.intensity)}] (${intensityDesc}): ${items}.`;
                  specialInstructionParts.push(instruction);
             }
         });
@@ -1447,10 +1775,6 @@ This is a specific directive to replace the SKY in the Target Image with the cus
 
         const anchorScene = anchorImageId ? targetImages.find(img => img.id === anchorImageId) : null;
         const isStatefulIteration = !!(anchorScene && anchorScene.generated);
-        const targetWorkingResolution = imageToProcess.target.width && imageToProcess.target.height
-          ? `${imageToProcess.target.width}x${imageToProcess.target.height}`
-          : 'the supplied target image resolution';
-
         const anchorSceneInstruction = isStatefulIteration ? `
 ---
 **STATEFUL ITERATION MODE (CRITICAL)**
@@ -1464,24 +1788,80 @@ Apply the style from the Reference Image with a decay factor (alpha) to prevent 
 ---
 ` : '';
 
+        const promptEditInstruction = promptText ? `
+---
+**USER PROMPT EDIT (DIRECT CREATIVE INSTRUCTION)**
+The user has provided a plain-language edit request. Execute it as an additional edit layer inside the same Reference Transfer Contract.
+- **User request:** ${promptText}
+- **How to apply:** Apply this request only where it supports the selected Reference DNA, custom assets, and target image realism.
+- **Subject consistency:** The prompt is NOT permission to change the target subject's identity, pose, body proportions, face, hands, eyes, teeth, nails, jewelry, skin texture, clothing fit, or camera detail unless the user explicitly asks for one of those traits and the result can remain photorealistic.
+- **Realism requirement:** Blend the prompt edit with physically plausible lighting, shadows, color spill, edge atmosphere, lens depth, grain, and black/white point matching. The result must look like one real photograph, never a sticker, collage, or low-detail AI render.
+---
+` : '';
+        const firstReferenceImageNumber = isStatefulIteration ? 3 : 2;
+        const referenceInputDescription = canUseReference
+          ? [
+              ...(isStatefulIteration
+                ? ['- IMAGE 2: The Anchor Scene (The exact background and lighting environment to reuse).']
+                : []),
+              ...generationReferenceImages.map((image, index) => (
+                index === 0
+                  ? `- IMAGE ${firstReferenceImageNumber}: PRIMARY Reference DNA (${image.fileName || 'primary reference'}). This is the strongest source for scene identity, composition, lighting, color, mood, texture, and finish.`
+                  : `- IMAGE ${firstReferenceImageNumber + index}: SUPPORTING Reference DNA (${image.fileName || `supporting reference ${index}`}). Use it as supporting evidence for recurring palette, light, atmosphere, materials, lens behavior, and finishing.`
+              )),
+            ].join('\n')
+          : (isStatefulIteration
+              ? '- IMAGE 2: The Anchor Scene (The exact background and lighting environment to reuse).\n- No Reference DNA image was supplied. Treat the User Prompt Edit as the reference brief for the desired edit, background, lighting, style, and finish.'
+              : '- No Reference DNA image was supplied. Treat the User Prompt Edit as the reference brief for the desired edit, background, lighting, style, and finish.');
+        const sourceContractLabel = canUseReference ? 'Reference Transfer Contract' : 'Prompt Edit Contract';
+        const sceneBlueprintText = canUseReference
+          ? (sceneBlueprint || 'No scene blueprint available.')
+          : `No reference image was supplied. Use the User Prompt Edit as the scene blueprint while preserving the target subject, camera angle, crop, lighting logic, and photorealism. Prompt brief: ${promptText}`;
+
+        const targetFrameWidth = imageToProcess.target.width || targetInput.width || null;
+        const targetFrameHeight = imageToProcess.target.height || targetInput.height || null;
+        const targetFrameRatio = closestGeminiAspectRatio(targetFrameWidth, targetFrameHeight);
+        const targetFrameDescription = targetFrameWidth && targetFrameHeight
+          ? `${targetFrameWidth}x${targetFrameHeight} pixels (${targetFrameRatio || 'original'} output ratio)`
+          : 'the exact dimensions and aspect ratio of Image 1';
+
         const prompt = `
 **IMAGE INPUTS:**
 - IMAGE 1: The Target Image (Subject to be styled and composited).
-${isStatefulIteration
-  ? '- IMAGE 2: The Anchor Scene (The exact background and lighting environment to reuse).\n- IMAGE 3: The Reference DNA image. Use it as the direct visual source for background, lighting, color, mood, texture, spatial DNA, and final finish.'
-  : '- IMAGE 2: The Reference DNA image. Use it as the direct visual source for background, lighting, color, mood, texture, spatial DNA, and final finish.'}
+${referenceInputDescription}
 - SUBSEQUENT IMAGES (if any): Custom elements (clothing, accessories, faces, backgrounds) to apply.
+
+**REFERENCE TRANSFER CONTRACT / ${sourceContractLabel.toUpperCase()} (READ FIRST - NON-NEGOTIABLE)**
+Your job is to create one believable camera-made photograph by applying the supplied ${canUseReference ? 'reference DNA and prompt controls' : 'prompt edit brief'} to the target. The target subject remains the hero.
+- **Multi-reference synthesis:** ${generationReferenceImages.length > 1 ? `Synthesize all ${generationReferenceImages.length} references into one coherent photographic direction. The primary reference leads; supporting references clarify recurring traits. Never collage unrelated objects or copy reference subjects.` : 'Use the primary reference as the visual DNA source.'}
+- **Prompt authority:** ${promptText ? `The user's prompt is an active art-direction layer: "${promptText}". Use it to prioritize and combine reference traits while all subject and frame locks remain absolute.` : 'No additional prompt direction was supplied.'}
+- **Subject preservation:** Preserve the target subject's identity, pose, body proportions, hands, eyes, teeth, fingernails, jewelry, skin texture, hairline, fabric weave, clothing fit, and camera detail. Do not beautify, redraw, slim, resize, duplicate, or replace the subject.
+- **Lighting transfer:** Use ${canUseReference ? 'the reference, prompt, and selected Lighting slider' : 'the prompt edit brief'} to rebuild scene lighting around the subject while respecting the light already visible on the subject. Match key direction, fill, rim, shadow softness, catchlights, color temperature, bounce light, contact shadows, and light wrap.
+- **Background transfer:** Use ${canUseReference ? 'the selected Background and Spatial DNA sliders' : 'the prompt edit brief'} to replace or restyle the environment around the locked subject. Fit the scene to the subject's camera angle, lens, crop, and scale. Never scale the subject to fit the scene.
+- **Realism standard:** Match black/white points, local contrast, color spill, atmospheric depth, foreground/background focus, grain, sharpness, edge light wrap, and contact shadows so the result cannot read as a sticker, cutout, or pasted subject.
+- **Mobile/desktop parity:** This request must behave identically across iPhone PWA and Windows desktop. Do not lower detail, simplify blending, or reduce output quality for mobile-originated requests.
+
+**SLIDER INTENSITY CONTRACT**
+- 0 means do not transfer that category. Preserve the target image for that trait.
+- 1-25 means subtle influence. The target remains dominant.
+- 26-50 means balanced blend. Reference DNA is visible but natural.
+- 51-75 means strong transfer. Reference DNA leads the look while the target subject remains locked.
+- 76-100 means dominant transfer. The selected trait should strongly follow the reference without damaging subject consistency.
+
+**ACTIVE INTENSITY MATRIX**
+${transferIntensityMatrix}
 
 **PRIME DIRECTIVE: ABSOLUTE GEOMETRIC LOCK & SUBJECT INTEGRITY (NON-NEGOTIABLE)**
 1. **GEOMETRIC LOCK:** You must treat the Target Image (Image 1) as a rigid, immutable structural wireframe. You are strictly forbidden from modifying the subject's pose, position, scale, or framing. This includes the exact position of arms, head, fingers, and body posture.
 2. **SUBJECT INTEGRITY:** The subject's anatomy and physical state must remain 100% identical to Image 1. You are only transforming the aesthetic, lighting, and environment.
 3. **STYLE PRECISION:** You MUST strictly adhere to the provided Intensity percentages for each style category. 
-   - 0-25%: Barely perceptible influence.
-   - 26-50%: Balanced blend.
-   - 51-75%: Strong stylistic dominance.
-   - 76-100%: Total stylistic takeover.
+   - 0%: No transfer from that category.
+   - 1-25%: Subtle reference influence.
+   - 26-50%: Balanced reference/target blend.
+   - 51-75%: Strong stylistic dominance without subject drift.
+   - 76-100%: Dominant reference trait while preserving subject geometry and realism.
 4. **CAMERA-GRADE DETAIL PRESERVATION:** Treat Image 1 as a high-resolution Canon R5 C still. Preserve micro-detail: hair strands, eyelashes, eyes, teeth, fingernails, jewelry, skin texture, fabric weave, stitching, labels, and natural camera sharpness. Do not create waxy skin, smudged fabric, low-detail hands, blurred accessories, or AI-smooth plastic texture.
-5. **RESOLUTION & FRAME FIDELITY:** The target working resolution is ${targetWorkingResolution}. Preserve the exact crop, framing, aspect ratio, and subject scale. Return the highest supported 4K-quality image with crisp fine details and no artificial softening.
+5. **RESOLUTION & FRAME FIDELITY:** The locked output frame is ${targetFrameDescription}. Preserve the exact crop, framing, camera orientation, horizon, subject coordinates, subject scale, and negative space from Image 1. Do not crop, zoom, rotate, recenter, extend, pad, or recompose the frame. Return the highest supported 4K-quality image with crisp fine details and no artificial softening.
 
 **ROLE & GOAL**
 You are an Elite Photorealistic Compositing and Style Transfer Engine. Your absolute top priority is UNCOMPROMISING REALISM while PRESERVING THE PHOTOGRAPHER'S ORIGINAL POSE. Every generation must look like a genuine, unedited photograph. The subject must be seamlessly integrated into the environment without moving a single limb or changing their head tilt.
@@ -1512,8 +1892,8 @@ ${anchorSceneInstruction}
 4.  **SPATIAL & POSE INTEGRITY (HIGHEST PRIORITY):**
     - **FROZEN SKELETON:** The subject's pose MUST be identical to Image 1. You are FORBIDDEN from making even "subtle" adjustments to the pose. The head tilt, arm positions, and finger placements must be pixel-perfect matches to the original.
     - **PIXEL-PERFECT POSITION:** The subject's position, size, silhouette, and framing must remain consistent with Image 1. Adjust the new floor/background/shadows to ground the subject, not the subject itself.
-    - **NO RESIZING/RATIO CHANGE:** You are FORBIDDEN from changing the overall image aspect ratio.
-    ${!aspectRatio ? '- **NO FRAME EXPANSION**: Do NOT generate outside the original image boundaries. Regenerate the in-frame environment around the target subject without expanding the frame.' : ''}
+    - **NO RESIZING/RATIO CHANGE:** You are FORBIDDEN from changing the overall image aspect ratio, orientation, crop, or canvas bounds.
+    - **NO FRAME EXPANSION:** Do NOT generate outside the original image boundaries. Regenerate the in-frame environment around the target subject without expanding, cropping, padding, zooming, or reframing the image.
 
 5.  **IDENTITY LOCK (SUPREME AUTHORITY):**
     - The face, hair, and clothing in the output MUST be the EXACT same as in the Target Image (Image 1). Preserve all unique biometric features, moles, scars, and textures.${isStatefulIteration ? ' DO NOT use the subject from the Anchor Scene (Image 2).' : ''}
@@ -1524,10 +1904,13 @@ ${anchorSceneInstruction}
 ${targetImageAnalysis}
 
 **STEP 1.5: REFERENCE VISUAL DNA & SPATIAL BLUEPRINT (SOURCE OF TRUTH)**
-${sceneBlueprint || "No scene blueprint available."}
+${sceneBlueprintText}
 
 **STEP 2: EXECUTE STYLE TRANSFER COMMANDS**
-${styleCommands.length > 0 ? styleCommands : "No style commands. The image should remain unchanged aesthetically."}
+${styleCommands.length > 0 ? styleCommands : promptText ? `No checklist style commands are active. Execute the User Prompt Edit using the ${sourceContractLabel} and preserve the target subject.` : "No style commands. The image should remain unchanged aesthetically."}
+
+**STEP 2.5: EXECUTE USER PROMPT EDIT**
+${promptEditInstruction || 'No direct user prompt edit was provided.'}
 
 **STEP 3: OBSERVE THE CONTENT OMISSION LIST**
 ${contentOmissionList}
@@ -1564,8 +1947,12 @@ Before outputting, verify:
             });
         }
 
-        imageParts.push({
-            inlineData: { data: referenceInput.base64, mimeType: referenceInput.mimeType }
+        loadedReferenceInputs.forEach((referenceInput) => {
+          if (referenceInput.base64 && referenceInput.mimeType) {
+            imageParts.push({
+                inlineData: { data: referenceInput.base64, mimeType: referenceInput.mimeType }
+            });
+          }
         });
 
         const activeItemInputs = await Promise.all(activeItems.map(item => imageToGeminiInput(item.image, qualityMode)));
@@ -1592,10 +1979,18 @@ Before outputting, verify:
         }
 
         const seed = (isStatefulIteration && sessionSeed) ? sessionSeed : Math.floor(Math.random() * 1000000);
-        let newImageBase64 = await editImage(imageParts, prompt, aspectRatio, seed);
+        let newImageBase64 = await editImage(imageParts, prompt, targetFrameRatio, seed);
         if (cancelGenerationRef.current) throw new Error("Cancelled");
 
-        const realismResult = await evaluateRealism(newImageBase64, 'image/png', targetInput.base64, targetInput.mimeType);
+        const realismResult = await evaluateRealism(
+          newImageBase64,
+          'image/png',
+          targetInput.base64,
+          targetInput.mimeType,
+          loadedReferenceInputs[0]?.base64 || targetInput.base64,
+          loadedReferenceInputs[0]?.mimeType || targetInput.mimeType,
+          transferSummary || (promptText ? `Prompt edit: ${promptText}` : 'Prompt-only edit'),
+        );
         if (cancelGenerationRef.current) throw new Error("Cancelled");
         if (realismResult === 'slightly off') {
           try {
@@ -1605,10 +2000,12 @@ Before outputting, verify:
 
 **AUTOMATIC REALISM REPAIR PASS**
 The last image input is the previous generated attempt. It was rejected because the subject/background integration looked visibly composited.
+Requested reference transfer summary: ${transferSummary}
 
 Repair the image now:
 - Keep the Target Image subject pose, identity, scale, and crop locked.
 - Keep the selected Reference DNA and requested background/style changes.
+- Treat the previous generated attempt as a negative repair reference: keep the successful background/DNA direction, but remove the visible pasted, washed-out, haloed, or weakly blended qualities.
 - Remove any sticker-like edge, halo, pasted cutout, washed-out haze, or flat gray exposure.
 - Rebuild the scene lighting so the background looks physically lit by the same key/fill/rim direction already visible on the subject.
 - Add believable contact shadows, natural edge light wrap, local ambient color spill, matching black/white points, matching grain, and matching depth of field.
@@ -1619,7 +2016,7 @@ Return one polished final image that looks like a single in-camera photograph.`;
               newImageBase64 = await editImage(
                 [...imageParts, { inlineData: { data: previousAttempt.base64, mimeType: previousAttempt.mimeType } }],
                 repairPrompt,
-                aspectRatio,
+                targetFrameRatio,
                 seed + 1,
               );
               if (cancelGenerationRef.current) throw new Error("Cancelled");
@@ -1633,13 +2030,16 @@ Return one polished final image that looks like a single in-camera photograph.`;
         }
 
         const outputFileName = `${(imageToProcess.target.fileName || 'istudio-output').replace(/\.[^/.]+$/, '')}-reference-edit.png`;
+        const outputFrame = targetFrameWidth && targetFrameHeight
+          ? { width: targetFrameWidth, height: targetFrameHeight }
+          : undefined;
         const storedOutput = await persistProjectImage({
           fileName: outputFileName,
           base64: newImageBase64,
           mimeType: 'image/png',
-          width: null,
-          height: null,
-        }, 'outputs');
+          width: targetFrameWidth,
+          height: targetFrameHeight,
+        }, 'outputs', outputFrame);
         const newImageSrc = storedOutput.assetUrl || `data:image/png;base64,${newImageBase64}`;
 
         const generationId = Date.now();
@@ -1691,7 +2091,9 @@ Return one polished final image that looks like a single in-camera photograph.`;
     customSkyItem,
     getGenerationSettingsSnapshot,
     project?.id,
+    promptEdit,
     referenceImage,
+    supportingReferenceImages,
     saveProjectNow,
     sceneBlueprint,
     sessionSeed,
@@ -1716,13 +2118,12 @@ Return one polished final image that looks like a single in-camera photograph.`;
       setError("Please upload and select a target image.");
       return;
     }
-    if (!hasImageSource(referenceImage) || !referenceImage.mimeType) {
-      setError("Upload a reference photo to define the visual DNA.");
+    if (!hasReferenceSource && !hasPromptEdit) {
+      setError("Upload a reference photo or type a prompt edit.");
       return;
     }
     
     setError(null);
-    setIsMobileSidebarOpen(false);
     const categoriesWithSelections = checklist.filter(c => c.items.some(i => i.checked) && c.intensity > 0);
     const hasCustomClothing = [...customClothingItems.man, ...customClothingItems.woman].some(c => c.enabled && c.status === 'ready');
     const hasCustomAccessory = [...customAccessoryItems.man, ...customAccessoryItems.woman].some(c => c.enabled && c.status === 'ready');
@@ -1730,22 +2131,21 @@ Return one polished final image that looks like a single in-camera photograph.`;
     const hasCustomBackground = customBackgroundItem.enabled && customBackgroundItem.status === 'ready';
     const hasCustomSky = customSkyItem.enabled && customSkyItem.status === 'ready';
     
-    if (categoriesWithSelections.length === 0 && !hasCustomClothing && !hasCustomAccessory && !hasCustomFace && !hasCustomBackground && !hasCustomSky) {
-        setError("Select at least one DNA element or enable a custom asset.");
+    if (categoriesWithSelections.length === 0 && !hasPromptEdit && !hasCustomClothing && !hasCustomAccessory && !hasCustomFace && !hasCustomBackground && !hasCustomSky) {
+        setError("Select at least one DNA element, type a prompt edit, or enable a custom asset.");
         return;
     }
 
     setTargetImages(prev => prev.map((img, idx) => idx === activeImageIndex ? { ...img, status: 'queued' } : img));
-  }, [activeImageIndex, targetImages, referenceImage, checklist, customClothingItems, customAccessoryItems, customFaceItems, customBackgroundItem, customSkyItem]);
+  }, [activeImageIndex, targetImages, hasReferenceSource, hasPromptEdit, checklist, customClothingItems, customAccessoryItems, customFaceItems, customBackgroundItem, customSkyItem]);
 
   const handleQueueSelected = useCallback(() => {
-    if (!hasImageSource(referenceImage) || !referenceImage.mimeType) {
-        setError("Upload a reference photo to define the visual DNA.");
+    if (!hasReferenceSource && !hasPromptEdit) {
+        setError("Upload a reference photo or type a prompt edit.");
         return;
     }
     
     setError(null);
-    setIsMobileSidebarOpen(false);
     const categoriesWithSelections = checklist.filter(c => c.items.some(i => i.checked) && c.intensity > 0);
     const hasCustomClothing = [...customClothingItems.man, ...customClothingItems.woman].some(c => c.enabled && c.status === 'ready');
     const hasCustomAccessory = [...customAccessoryItems.man, ...customAccessoryItems.woman].some(c => c.enabled && c.status === 'ready');
@@ -1753,8 +2153,8 @@ Return one polished final image that looks like a single in-camera photograph.`;
     const hasCustomBackground = customBackgroundItem.enabled && customBackgroundItem.status === 'ready';
     const hasCustomSky = customSkyItem.enabled && customSkyItem.status === 'ready';
     
-    if (categoriesWithSelections.length === 0 && !hasCustomClothing && !hasCustomAccessory && !hasCustomFace && !hasCustomBackground && !hasCustomSky) {
-        setError("Select at least one DNA element or enable a custom asset.");
+    if (categoriesWithSelections.length === 0 && !hasPromptEdit && !hasCustomClothing && !hasCustomAccessory && !hasCustomFace && !hasCustomBackground && !hasCustomSky) {
+        setError("Select at least one DNA element, type a prompt edit, or enable a custom asset.");
         return;
     }
 
@@ -1766,11 +2166,11 @@ Return one polished final image that looks like a single in-camera photograph.`;
     
     // Optional: Clear selection after queuing
     setSelectedImageIds(new Set());
-  }, [targetImages, referenceImage, checklist, customClothingItems, customAccessoryItems, customFaceItems, customBackgroundItem, customSkyItem, selectedImageIds]);
+  }, [targetImages, hasReferenceSource, hasPromptEdit, checklist, customClothingItems, customAccessoryItems, customFaceItems, customBackgroundItem, customSkyItem, selectedImageIds]);
 
   const handleQueueAll = useCallback(() => {
-    if (!hasImageSource(referenceImage) || !referenceImage.mimeType) {
-        setError("Upload a reference photo to define the visual DNA.");
+    if (!hasReferenceSource && !hasPromptEdit) {
+        setError("Upload a reference photo or type a prompt edit.");
         return;
     }
     
@@ -1782,15 +2182,15 @@ Return one polished final image that looks like a single in-camera photograph.`;
     const hasCustomBackground = customBackgroundItem.enabled && customBackgroundItem.status === 'ready';
     const hasCustomSky = customSkyItem.enabled && customSkyItem.status === 'ready';
     
-    if (categoriesWithSelections.length === 0 && !hasCustomClothing && !hasCustomAccessory && !hasCustomFace && !hasCustomBackground && !hasCustomSky) {
-        setError("Select at least one DNA element or enable a custom asset.");
+    if (categoriesWithSelections.length === 0 && !hasPromptEdit && !hasCustomClothing && !hasCustomAccessory && !hasCustomFace && !hasCustomBackground && !hasCustomSky) {
+        setError("Select at least one DNA element, type a prompt edit, or enable a custom asset.");
         return;
     }
 
     setTargetImages(prev => prev.map(img => 
         (img.status === 'pending' || img.status === 'error') ? { ...img, status: 'queued' } : img
     ));
-  }, [targetImages, referenceImage, checklist, customClothingItems, customAccessoryItems, customFaceItems, customBackgroundItem, customSkyItem]);
+  }, [targetImages, hasReferenceSource, hasPromptEdit, checklist, customClothingItems, customAccessoryItems, customFaceItems, customBackgroundItem, customSkyItem]);
   
   const handleRemoveImage = useCallback((idToRemove: string) => {
     setTargetImages(prev => {
@@ -1829,6 +2229,299 @@ Return one polished final image that looks like a single in-camera photograph.`;
 
   const activeTarget = activeImageIndex > -1 ? targetImages[activeImageIndex] : null;
   const activeTargetIsProcessing = activeTarget?.status === 'processing';
+
+  useEffect(() => {
+    setFinishSettings(normalizeFinishSettings(activeTarget?.finishSettings));
+  }, [activeTarget?.id]);
+
+  useEffect(() => () => {
+    if (finishSaveTimerRef.current) {
+      window.clearTimeout(finishSaveTimerRef.current);
+    }
+  }, []);
+
+  const updateTargetsAndSave = useCallback((updater: (images: BatchImage[]) => BatchImage[]) => {
+    setTargetImages((current) => {
+      const next = updater(current);
+      saveProjectNow({ targetImages: next });
+      return next;
+    });
+  }, [saveProjectNow]);
+
+  const scheduleTargetsSave = useCallback((next: BatchImage[], settings: ProFinishSettings, message = proToolMessage) => {
+    if (finishSaveTimerRef.current) {
+      window.clearTimeout(finishSaveTimerRef.current);
+    }
+    finishSaveTimerRef.current = window.setTimeout(() => {
+      saveProjectNow({
+        targetImages: next,
+        proWorkflow: {
+          ...(project?.state?.proWorkflow || {}),
+          finishSettings: settings,
+          lastProToolMessage: message,
+        },
+      });
+    }, 450);
+  }, [project?.state?.proWorkflow, proToolMessage, saveProjectNow]);
+
+  const updateActiveFinishSetting = useCallback((key: keyof ProFinishSettings, value: number) => {
+    const nextSettings = normalizeFinishSettings({ ...finishSettings, [key]: value });
+    setFinishSettings(nextSettings);
+    if (!activeTarget) return;
+    setTargetImages((current) => {
+      const next = current.map((image) => image.id === activeTarget.id ? {
+        ...image,
+        finishSettings: nextSettings,
+      } : image);
+      scheduleTargetsSave(next, nextSettings);
+      return next;
+    });
+  }, [activeTarget, finishSettings, scheduleTargetsSave]);
+
+  const selectedOrActiveTargets = useCallback(() => {
+    const selected = selectedImageIds.size > 0
+      ? targetImages.filter((image) => selectedImageIds.has(image.id) && hasImageSource(image.target))
+      : [];
+    if (selected.length > 0) return selected;
+    return activeTarget && hasImageSource(activeTarget.target) ? [activeTarget] : [];
+  }, [activeTarget, selectedImageIds, targetImages]);
+
+  const imageForProFinish = useCallback((target: BatchImage): ImageState => (
+    target.generated
+      ? {
+          fileName: target.target.fileName ? `${target.target.fileName.replace(/\.[^/.]+$/, '')}-result.png` : 'result.png',
+          base64: null,
+          mimeType: 'image/png',
+          assetUrl: target.generated,
+        }
+      : target.target
+  ), []);
+
+  const hasSelectedProToolTargets = selectedImageIds.size > 0 && targetImages.some((image) => selectedImageIds.has(image.id) && hasImageSource(image.target));
+  const hasProToolTargets = hasSelectedProToolTargets || Boolean(activeTarget && hasImageSource(activeTarget.target));
+
+  const handleInstallProAiPack = useCallback(async () => {
+    setIsProToolBusy(true);
+    setError(null);
+    setProToolMessage('Installing the Local Pro AI Pack...');
+    try {
+      const status = await installProAiPack();
+      setProToolStatus(status);
+      setProToolMessage(status.message);
+      saveProjectNow({ proWorkflow: { ...(project?.state?.proWorkflow || {}), finishSettings, lastProToolMessage: status.message } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not install the Local Pro AI Pack.';
+      setProToolMessage(message);
+      setError(message);
+    } finally {
+      setIsProToolBusy(false);
+    }
+  }, [finishSettings, project?.state?.proWorkflow, saveProjectNow]);
+
+  const handleAnalyzeShoot = useCallback(async () => {
+    if (!project?.id) {
+      setError('Create or open a project before using Pro Tools.');
+      return;
+    }
+    const targets = selectedOrActiveTargets();
+    if (targets.length === 0) {
+      setError('Add target photos before analyzing the shoot.');
+      return;
+    }
+    setIsProToolBusy(true);
+    setError(null);
+    try {
+      for (const target of targets) {
+        setProToolMessage(`Analyzing ${target.target.fileName || 'photo'}...`);
+        const result = await cullProImage(project.id, target.target);
+        updateTargetsAndSave((images) => images.map((image) => image.id === target.id ? {
+          ...image,
+          rating: result.rating,
+          pickStatus: result.pickStatus,
+          cullScore: result.score,
+          flags: result.flags,
+          sharpnessScore: result.sharpnessScore,
+          exposureScore: result.exposureScore,
+          contrastScore: result.contrastScore,
+          faceCount: result.faceCount,
+          eyeStatus: result.eyeStatus,
+        } : image));
+      }
+      setProToolMessage(`Analyzed ${targets.length} photo${targets.length === 1 ? '' : 's'}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Shoot analysis failed.';
+      setProToolMessage(message);
+      setError(message);
+    } finally {
+      setIsProToolBusy(false);
+    }
+  }, [project?.id, selectedOrActiveTargets, updateTargetsAndSave]);
+
+  const handlePickBest = useCallback(() => {
+    if (targetImages.length === 0) return;
+    updateTargetsAndSave((images) => images.map((image) => {
+      const score = image.cullScore ?? 0;
+      return {
+        ...image,
+        pickStatus: score >= 72 ? 'pick' : score > 0 && score < 44 ? 'reject' : image.pickStatus || 'review',
+      };
+    }));
+    setProToolMessage('Best images marked as picks. Low-scoring images marked for review or rejection.');
+  }, [targetImages.length, updateTargetsAndSave]);
+
+  const handleRemoveBackground = useCallback(async () => {
+    if (!project?.id) {
+      setError('Create or open a project before using Pro Tools.');
+      return;
+    }
+    const targets = selectedOrActiveTargets();
+    if (targets.length === 0) {
+      setError('Open a target photo or select images in the tray before removing backgrounds.');
+      return;
+    }
+    setIsProToolBusy(true);
+    setError(null);
+    try {
+      for (const target of targets) {
+        setProToolMessage(`Creating transparent cutout for ${target.target.fileName || 'photo'}...`);
+        const result = await removeProBackground(project.id, target.target);
+        const generated = getImageSrc(result.image) || result.image.assetUrl || null;
+        if (!generated) throw new Error('The cutout was saved, but ISTUDIO could not load the preview.');
+        updateTargetsAndSave((images) => images.map((image) => image.id === target.id ? {
+          ...image,
+          generated,
+          status: 'done',
+        } : image));
+      }
+      setProToolMessage(`Transparent PNG complete for ${targets.length} photo${targets.length === 1 ? '' : 's'}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Background removal failed.';
+      setProToolMessage(message);
+      setError(message);
+    } finally {
+      setIsProToolBusy(false);
+    }
+  }, [project?.id, selectedOrActiveTargets, updateTargetsAndSave]);
+
+  const handleFinishImage = useCallback(async () => {
+    if (!project?.id) {
+      setError('Create or open a project before using Pro Tools.');
+      return;
+    }
+    const targets = selectedOrActiveTargets();
+    if (targets.length === 0) {
+      setError('Open a target photo or select images in the tray before applying the finishing pass.');
+      return;
+    }
+    setIsProToolBusy(true);
+    setError(null);
+    let lastMessage = 'Finished locally and saved to the project.';
+    const settingsForRun = normalizeFinishSettings(finishSettings);
+    const shouldBatchApply = selectedImageIds.size > 0;
+    try {
+      for (const target of targets) {
+        setProToolMessage(`Applying local finishing pass to ${target.target.fileName || 'photo'}...`);
+        const targetSettings = shouldBatchApply ? settingsForRun : normalizeFinishSettings(target.finishSettings || settingsForRun);
+        const result = await finishProImage(project.id, imageForProFinish(target), targetSettings);
+        const generated = getImageSrc(result.image) || result.image.assetUrl || null;
+        if (!generated) throw new Error('The finished image was saved, but ISTUDIO could not load the preview.');
+        lastMessage = result.message;
+        updateTargetsAndSave((images) => images.map((image) => image.id === target.id ? {
+          ...image,
+          generated,
+          status: 'done',
+          finishSettings: DEFAULT_FINISH_SETTINGS,
+        } : image));
+      }
+      const message = `Finished ${targets.length} photo${targets.length === 1 ? '' : 's'} locally.`;
+      setProToolMessage(message);
+      setFinishSettings(DEFAULT_FINISH_SETTINGS);
+      saveProjectNow({ proWorkflow: { ...(project.state?.proWorkflow || {}), finishSettings: DEFAULT_FINISH_SETTINGS, lastProToolMessage: message || lastMessage } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Finishing pass failed.';
+      setProToolMessage(message);
+      setError(message);
+    } finally {
+      setIsProToolBusy(false);
+    }
+  }, [finishSettings, imageForProFinish, project, saveProjectNow, selectedImageIds.size, selectedOrActiveTargets, updateTargetsAndSave]);
+
+  const handleCleanPortrait = useCallback(async () => {
+    const previous = normalizeFinishSettings(finishSettings);
+    const portraitSettings = normalizeFinishSettings({ ...previous, denoise: -30, sharpen: 16, clarity: 10 });
+    setFinishSettings(portraitSettings);
+    if (!project?.id) {
+      setError('Create or open a project before using Pro Tools.');
+      return;
+    }
+    const targets = selectedOrActiveTargets();
+    if (targets.length === 0) {
+      setError('Open a target photo or select images in the tray before cleaning portraits.');
+      return;
+    }
+    setIsProToolBusy(true);
+    setError(null);
+    try {
+      for (const target of targets) {
+        setProToolMessage(`Cleaning portrait for ${target.target.fileName || 'photo'}...`);
+        const result = await finishProImage(project.id, imageForProFinish(target), portraitSettings);
+        const generated = getImageSrc(result.image) || result.image.assetUrl || null;
+        if (!generated) throw new Error('The cleaned portrait was saved, but ISTUDIO could not load the preview.');
+        updateTargetsAndSave((images) => images.map((image) => image.id === target.id ? { ...image, generated, status: 'done', finishSettings: DEFAULT_FINISH_SETTINGS } : image));
+      }
+      setFinishSettings(DEFAULT_FINISH_SETTINGS);
+      setProToolMessage(`Portrait cleanup saved for ${targets.length} photo${targets.length === 1 ? '' : 's'}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Portrait cleanup failed.';
+      setProToolMessage(message);
+      setError(message);
+    } finally {
+      setIsProToolBusy(false);
+    }
+  }, [finishSettings, imageForProFinish, project?.id, selectedOrActiveTargets, updateTargetsAndSave]);
+
+  const handleUpscaleExport = useCallback(async () => {
+    if (!project?.id) {
+      setError('Create or open a project before using Pro Tools.');
+      return;
+    }
+    const targets = selectedOrActiveTargets();
+    if (targets.length === 0) {
+      setError('Open a target photo or select images in the tray before upscaling.');
+      return;
+    }
+    setIsProToolBusy(true);
+    setError(null);
+    const settingsForRun = normalizeFinishSettings(finishSettings);
+    try {
+      for (const target of targets) {
+        setProToolMessage(`Creating high-resolution export for ${target.target.fileName || 'photo'}...`);
+        const result = await finishProImage(project.id, imageForProFinish(target), { ...settingsForRun, upscale: 2 });
+        const generated = getImageSrc(result.image) || result.image.assetUrl || null;
+        if (!generated) throw new Error('The upscaled image was saved, but ISTUDIO could not load the preview.');
+        updateTargetsAndSave((images) => images.map((image) => image.id === target.id ? { ...image, generated, status: 'done', finishSettings: DEFAULT_FINISH_SETTINGS } : image));
+      }
+      setFinishSettings(DEFAULT_FINISH_SETTINGS);
+      setProToolMessage(`Upscale export saved for ${targets.length} photo${targets.length === 1 ? '' : 's'}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Upscale export failed.';
+      setProToolMessage(message);
+      setError(message);
+    } finally {
+      setIsProToolBusy(false);
+    }
+  }, [finishSettings, imageForProFinish, project?.id, selectedOrActiveTargets, updateTargetsAndSave]);
+
+  const handleCopyFinishToSelected = useCallback(() => {
+    if (selectedImageIds.size === 0 || !activeTarget) return;
+    const settingsToCopy = normalizeFinishSettings(finishSettings);
+    updateTargetsAndSave((images) => images.map((image) => (
+      selectedImageIds.has(image.id)
+        ? { ...image, finishSettings: settingsToCopy }
+        : image
+    )));
+    setProToolMessage(`Copied current finishing settings to ${selectedImageIds.size} selected photo${selectedImageIds.size === 1 ? '' : 's'}.`);
+  }, [activeTarget, finishSettings, selectedImageIds, updateTargetsAndSave]);
   
   const hasActiveCustomItems = [
     ...customClothingItems.man, ...customClothingItems.woman,
@@ -1836,7 +2529,7 @@ Return one polished final image that looks like a single in-camera photograph.`;
     customFaceItems.man, customFaceItems.woman
   ].some(item => item.enabled) || customBackgroundItem.enabled || customSkyItem.enabled;
 
-  const isActionable = !isAnalyzing && !!activeTarget && !['queued', 'processing'].includes(activeTarget.status) && hasImageSource(referenceImage) && (checklist.length > 0 || hasActiveCustomItems);
+  const isActionable = !isAnalyzing && !!activeTarget && !['queued', 'processing'].includes(activeTarget.status) && (hasReferenceSource || hasPromptEdit) && (checklist.length > 0 || hasActiveCustomItems || hasPromptEdit);
 
   const getGenerateButtonText = () => {
     if (activeTarget?.status === 'queued') {
@@ -1852,6 +2545,9 @@ Return one polished final image that looks like a single in-camera photograph.`;
   // This allows switching to other images and queuing them up.
   const isControlsLocked = activeTargetIsProcessing || isAnalyzing;
   const selectedCount = selectedImageIds.size;
+  const finishPreviewStyle = activeTarget && hasFinishAdjustments(finishSettings)
+    ? finishPreviewStyleFor(finishSettings)
+    : undefined;
   const isTetherWatchingThisProject = Boolean(tetherStatus?.isWatching && project?.id && tetherStatus.projectId === project.id);
   const tetherCapturesForProject = (tetherStatus?.captures || [])
     .filter((capture) => !project?.id || capture.projectId === project.id || capture.projectId === tetherStatus?.projectId)
@@ -1862,7 +2558,7 @@ Return one polished final image that looks like a single in-camera photograph.`;
       ? 'Watching another project'
       : 'Idle';
   const tetherSetupWarning = tetherAutoEdit && !canAutoQueueTether
-    ? 'Auto Edit is on. Add a reference image and select at least one DNA control before new captures can generate.'
+    ? 'Auto Edit is on. Add a reference image or prompt edit before new captures can generate.'
     : null;
   const getTetherCaptureDisplay = (capture: TetherCapture) => {
     const target = capture.id ? targetImages.find((image) => image.tetherCaptureId === capture.id) : null;
@@ -1878,45 +2574,11 @@ Return one polished final image that looks like a single in-camera photograph.`;
     <motion.div 
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="mobile-reference-workspace relative flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg)] lg:flex-row"
+      className="desktop-reference-workspace relative grid h-full w-full grid-cols-[minmax(0,1fr)_380px] overflow-hidden bg-[var(--color-bg)]"
       style={{'--dynamic-accent-color': accentColor || 'var(--color-accent)'} as React.CSSProperties}
     >
-      {/* Mobile Toggle Button */}
-      <button 
-        onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-        className="mobile-settings-fab fixed right-3 top-[calc(env(safe-area-inset-top)+72px)] z-[100] flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-[var(--color-accent)] text-black shadow-2xl shadow-black/40 transition-transform active:scale-95 lg:hidden"
-        aria-label="Open edit settings"
-      >
-        <div className="relative">
-          <AnimatePresence mode="wait">
-            {isMobileSidebarOpen ? (
-              <motion.div
-                key="close"
-                initial={{ opacity: 0, rotate: -90 }}
-                animate={{ opacity: 1, rotate: 0 }}
-                exit={{ opacity: 0, rotate: 90 }}
-              >
-                <XCircleIcon className="w-6 h-6" />
-              </motion.div>
-            ) : (
-              <motion.div
-                key="settings"
-                initial={{ opacity: 0, rotate: 90 }}
-                animate={{ opacity: 1, rotate: 0 }}
-                exit={{ opacity: 0, rotate: -90 }}
-              >
-                <SettingsIcon className="w-5 h-5" />
-              </motion.div>
-            )}
-          </AnimatePresence>
-          {checklist.some(c => c.items.some(i => i.checked)) && !isMobileSidebarOpen && (
-            <div className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full border-2 border-black" />
-          )}
-        </div>
-      </button>
-
       {/* --- Main Editor Area (Left) --- */}
-      <main className="flex-1 flex flex-col min-w-0 min-h-0 relative z-10 w-full overflow-hidden">
+      <main className="relative z-10 flex min-h-0 min-w-0 flex-col overflow-hidden">
         <div className="flex-1 overflow-hidden relative">
             <MainPanel
               activeTarget={activeTarget}
@@ -1931,58 +2593,46 @@ Return one polished final image that looks like a single in-camera photograph.`;
               referenceDominantColor={accentColor}
               selectedImageIds={selectedImageIds}
               onToggleImageSelection={handleToggleSelection}
-              onGenerate={handleQueueGeneration}
-              onCancelGeneration={handleCancelGeneration}
-              isActionable={isActionable}
-              isProcessing={activeTargetIsProcessing}
-              generateButtonText={getGenerateButtonText()}
+              finishPreviewStyle={finishPreviewStyle}
             />
         </div>
       </main>
 
       {/* --- Sidebar (Right) --- */}
-      <aside className={`fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.5rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top)+68px)] z-[90] w-[min(420px,calc(100vw-16px))] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl transition-transform duration-500 ease-in-out lg:relative lg:inset-auto lg:z-30 lg:flex lg:w-full lg:max-w-[360px] lg:translate-x-0 lg:rounded-none lg:border-y-0 lg:border-r-0 xl:max-w-[400px] ${
-        isMobileSidebarOpen ? 'flex translate-x-0' : 'hidden translate-x-full'
-      }`}>
-        {/* Mobile Sidebar Close Backdrop */}
-        <AnimatePresence>
-          {isMobileSidebarOpen && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsMobileSidebarOpen(false)}
-              className="fixed inset-0 bg-black/60 backdrop-blur-sm lg:hidden"
-            />
-          )}
-        </AnimatePresence>
-        <div className="flex-shrink-0 border-b border-[var(--color-border)] bg-[var(--color-header)] px-6 py-4">
-          <h2 className="text-sm font-semibold text-[var(--color-text)]">Reference DNA</h2>
-          <p className="mt-1 text-xs text-[var(--color-text-muted)]">Control the inherited background, lighting, style, mood, and selected elements.</p>
+      <aside className="desktop-inspector relative z-30 flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-[-24px_0_60px_rgba(0,0,0,0.18)]">
+        <div className="flex-shrink-0 border-b border-[var(--color-border)] bg-[var(--color-header)] px-5 py-4">
+          <div className="mb-1 flex items-center justify-between">
+            <h2 className="text-sm font-extrabold text-[var(--color-text)]">Reference Controls</h2>
+            <span className="rounded-md border border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 px-2 py-1 text-[10px] font-extrabold text-[var(--color-accent)]">LIVE</span>
+          </div>
+          <p className="text-xs leading-5 text-[var(--color-text-muted)]">Choose the visual DNA, direct the edit, and control transfer strength.</p>
         </div>
         
-        <div className="min-h-0 flex-1 space-y-8 overflow-y-auto p-6 custom-scrollbar">
+        <div className="min-h-0 flex-1 space-y-7 overflow-y-auto p-5 custom-scrollbar">
           {/* Reference Image Section */}
           <section>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="flex items-center gap-2 text-xs font-semibold text-[var(--color-text-muted)]">
-                <SparklesIcon className="w-3 h-3 text-[var(--color-accent)]" />
-                DNA Reference
-              </h2>
-              {hasImageSource(referenceImage) && (
+              <span>
+                <h2 className="flex items-center gap-2 text-xs font-semibold text-[var(--color-text-muted)]">
+                  <SparklesIcon className="w-3 h-3 text-[var(--color-accent)]" />
+                  Reference Direction
+                </h2>
+                <p className="mt-1 text-[10px] text-[var(--color-text-muted)]/70">Primary look plus supporting visual cues</p>
+              </span>
+              {hasReferenceSource && (
                 <button 
-                  onClick={() => handleReferenceImageSelect({ fileName: null, base64: null, mimeType: null })}
+                  onClick={handleClearReferences}
                   className="text-xs font-semibold text-red-400/80 transition-colors hover:text-red-300"
                 >
-                  Clear
+                  Clear all
                 </button>
               )}
             </div>
             <div className="group relative rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1">
               <ImageUploader
                 id="reference-image"
-                title="DNA Reference"
-                subtitle="Upload source"
+                title="Primary reference"
+                subtitle="Upload the main visual direction"
                 image={referenceImage}
                 onImageSelect={handleReferenceImageSelect}
                 dominantColor={accentColor}
@@ -1997,6 +2647,305 @@ Return one polished final image that looks like a single in-camera photograph.`;
                 />
               )}
             </div>
+            <input
+              ref={supportingReferenceInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleSupportingReferenceInput}
+              disabled={isControlsLocked || supportingReferenceImages.length >= MAX_REFERENCE_IMAGES - 1}
+            />
+            <div className="mt-3 grid grid-cols-4 gap-2">
+              {supportingReferenceImages.map((image, index) => {
+                const imageSrc = getImageSrc(image);
+                return (
+                  <div
+                    key={`${image.assetPath || image.fileName || 'supporting-reference'}-${index}`}
+                    className="group/reference relative aspect-square overflow-hidden rounded-lg border border-[var(--color-border)] bg-black/30"
+                    title={image.fileName || `Supporting reference ${index + 1}`}
+                  >
+                    {imageSrc && <img src={imageSrc} alt={`Supporting reference ${index + 1}`} className="h-full w-full object-cover" />}
+                    <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-bold text-white">
+                      {index + 2}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSupportingReference(index)}
+                      disabled={isControlsLocked}
+                      className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-md border border-white/10 bg-black/75 text-white/70 opacity-0 transition hover:border-red-400/40 hover:text-red-300 group-hover/reference:opacity-100 focus:opacity-100"
+                      aria-label={`Remove supporting reference ${index + 1}`}
+                    >
+                      <Trash2Icon className="h-3 w-3" />
+                    </button>
+                  </div>
+                );
+              })}
+              {hasImageSource(referenceImage) && supportingReferenceImages.length < MAX_REFERENCE_IMAGES - 1 && (
+                <button
+                  type="button"
+                  onClick={() => supportingReferenceInputRef.current?.click()}
+                  disabled={isControlsLocked}
+                  className="flex aspect-square items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] bg-black/15 text-[var(--color-text-muted)] transition hover:border-[var(--color-accent)]/60 hover:bg-[var(--color-accent)]/5 hover:text-[var(--color-accent)] disabled:opacity-40"
+                  aria-label="Add supporting reference images"
+                  title="Add supporting references"
+                >
+                  <PlusIcon className="h-5 w-5" />
+                </button>
+              )}
+            </div>
+            {hasReferenceSource && (
+              <p className="mt-3 text-[10px] leading-4 text-[var(--color-text-muted)]">
+                {allReferenceImages.length} of {MAX_REFERENCE_IMAGES} references. Repeated lighting, palette, atmosphere, and material cues receive the strongest weight.
+              </p>
+            )}
+          </section>
+
+          {/* Prompt Edit Section */}
+          <section>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="flex items-center gap-2 text-xs font-semibold text-[var(--color-text-muted)]">
+                <MessageSquareTextIcon className="h-3.5 w-3.5 text-[var(--color-accent)]" />
+                Prompt Edit
+              </h2>
+              {promptEdit.trim() && (
+                <button
+                  type="button"
+                  onClick={() => handlePromptEditChange('')}
+                  className="text-xs font-semibold text-red-400/80 transition-colors hover:text-red-300"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 shadow-[var(--shadow-card)]">
+              <textarea
+                value={promptEdit}
+                onChange={(event) => handlePromptEditChange(event.target.value)}
+                disabled={isControlsLocked}
+                rows={4}
+                maxLength={900}
+                placeholder="Direct the blend: use reference 1 for the location, references 2 and 3 for warm cinematic lighting, keep the palette restrained..."
+                className="min-h-[104px] w-full resize-none rounded-xl border border-[var(--color-border)] bg-black/25 px-3 py-3 text-sm leading-6 text-[var(--color-text)] outline-none transition-colors placeholder:text-[var(--color-text-muted)]/55 focus:border-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <div className="mt-3 flex items-center justify-between gap-3 text-[10px] text-[var(--color-text-muted)]">
+                <span>Guides which reference traits lead while preserving the target and frame.</span>
+                <span className="shrink-0 rounded-md border border-[var(--color-border)] bg-black/20 px-1.5 py-0.5">{promptEdit.length}/900</span>
+              </div>
+            </div>
+          </section>
+
+          {/* Local Pro AI Tools */}
+          <section>
+            <button
+              type="button"
+              onClick={() => setIsProPanelOpen((isOpen) => !isOpen)}
+              className="group flex w-full items-center justify-between rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 py-3 text-left transition-all hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)]"
+              aria-expanded={isProPanelOpen}
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border ${
+                  proToolStatus?.installed
+                    ? 'border-[var(--color-accent)]/30 bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+                    : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-muted)]'
+                }`}>
+                  <WandSparklesIcon className="h-3.5 w-3.5" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-xs font-semibold text-[var(--color-text)]">Pro Tools</span>
+                  <span className="block truncate text-[11px] text-[var(--color-text-muted)]">
+                    {isBrowserStorage ? 'Windows desktop tools' : proToolStatus?.message || 'Local culling, cutouts, and finishing'}
+                  </span>
+                </span>
+              </span>
+              <span className="flex flex-shrink-0 items-center gap-2">
+                <span className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                  proToolStatus?.installed
+                    ? 'border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+                    : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-muted)]'
+                }`}>
+                  {isBrowserStorage ? 'Desktop' : proToolStatus?.installed ? 'Ready' : 'Pack'}
+                </span>
+                <ChevronDownIcon className={`h-4 w-4 text-[var(--color-text-muted)] transition-transform duration-200 ${isProPanelOpen ? 'rotate-180' : ''}`} />
+              </span>
+            </button>
+
+            <AnimatePresence initial={false}>
+              {isProPanelOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.18 }}
+                  className="mt-3 space-y-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4"
+                >
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-[var(--color-text-muted)]">Runtime</p>
+                      <p className="mt-1 text-xs font-semibold text-[var(--color-text)]">
+                        {isBrowserStorage ? 'Desktop only' : proToolStatus?.runtimeReady ? 'Local ready' : 'Not ready'}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-[var(--color-text-muted)]">Acceleration</p>
+                      <p className="mt-1 text-xs font-semibold text-[var(--color-text)]">
+                        {isBrowserStorage ? 'Mobile hidden' : proToolStatus?.acceleration === 'directml' ? 'GPU / CPU' : proToolStatus?.acceleration || 'Checking'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {!isBrowserStorage && !proToolStatus?.installed && (
+                    <button
+                      type="button"
+                      onClick={handleInstallProAiPack}
+                      disabled={isProToolBusy}
+                      className="primary-cta flex w-full items-center justify-center gap-2 px-4 py-3 text-xs disabled:opacity-40"
+                    >
+                      {isProToolBusy ? <RefreshCwIcon className="h-3.5 w-3.5 animate-spin" /> : <DownloadIcon className="h-3.5 w-3.5" />}
+                      Install Pro AI Pack
+                    </button>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleAnalyzeShoot}
+                      disabled={isBrowserStorage || isProToolBusy || targetImages.length === 0}
+                      className="btn-secondary flex min-h-16 flex-col items-start justify-center gap-1 px-3 py-3 text-left disabled:opacity-35"
+                    >
+                      <StarIcon className="h-4 w-4 text-[var(--color-accent)]" />
+                      <span className="text-xs font-bold text-[var(--color-text)]">Analyze Shoot</span>
+                      <span className="text-[10px] text-[var(--color-text-muted)]">Cull, rate, flag</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handlePickBest}
+                      disabled={isBrowserStorage || isProToolBusy || targetImages.length === 0}
+                      className="btn-secondary flex min-h-16 flex-col items-start justify-center gap-1 px-3 py-3 text-left disabled:opacity-35"
+                    >
+                      <CheckIcon className="h-4 w-4 text-emerald-300" />
+                      <span className="text-xs font-bold text-[var(--color-text)]">Pick Best</span>
+                      <span className="text-[10px] text-[var(--color-text-muted)]">Mark selects</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRemoveBackground}
+                      disabled={isBrowserStorage || isProToolBusy || !hasProToolTargets}
+                      className="btn-secondary flex min-h-16 flex-col items-start justify-center gap-1 px-3 py-3 text-left disabled:opacity-35"
+                    >
+                      <ScissorsIcon className="h-4 w-4 text-[var(--color-accent)]" />
+                      <span className="text-xs font-bold text-[var(--color-text)]">Transparent PNG</span>
+                      <span className="text-[10px] text-[var(--color-text-muted)]">Cutout + matte</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleFinishImage}
+                      disabled={isBrowserStorage || isProToolBusy || !hasProToolTargets}
+                      className="btn-secondary flex min-h-16 flex-col items-start justify-center gap-1 px-3 py-3 text-left disabled:opacity-35"
+                    >
+                      <ImageIcon className="h-4 w-4 text-[var(--color-accent)]" />
+                      <span className="text-xs font-bold text-[var(--color-text)]">Apply Finish</span>
+                      <span className="text-[10px] text-[var(--color-text-muted)]">Bake live edits</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCleanPortrait}
+                      disabled={isBrowserStorage || isProToolBusy || !hasProToolTargets}
+                      className="btn-secondary flex min-h-16 flex-col items-start justify-center gap-1 px-3 py-3 text-left disabled:opacity-35"
+                    >
+                      <WandSparklesIcon className="h-4 w-4 text-[var(--color-accent)]" />
+                      <span className="text-xs font-bold text-[var(--color-text)]">Clean Portrait</span>
+                      <span className="text-[10px] text-[var(--color-text-muted)]">Soft cleanup</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleUpscaleExport}
+                      disabled={isBrowserStorage || isProToolBusy || !hasProToolTargets}
+                      className="btn-secondary flex min-h-16 flex-col items-start justify-center gap-1 px-3 py-3 text-left disabled:opacity-35"
+                    >
+                      <ImageIcon className="h-4 w-4 text-[var(--color-accent)]" />
+                      <span className="text-xs font-bold text-[var(--color-text)]">Upscale Export</span>
+                      <span className="text-[10px] text-[var(--color-text-muted)]">2x local file</span>
+                    </button>
+                  </div>
+
+                  <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+                    <div className="mb-3 flex items-center gap-2">
+                      <SlidersHorizontalIcon className="h-3.5 w-3.5 text-[var(--color-accent)]" />
+                      <div>
+                        <p className="text-xs font-semibold text-[var(--color-text)]">Live finishing</p>
+                        <p className="text-[10px] text-[var(--color-text-muted)]">0 is neutral. Adjust the current photo, then apply or batch selected images.</p>
+                      </div>
+                    </div>
+                    {selectedImageIds.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleCopyFinishToSelected}
+                        disabled={isBrowserStorage || isProToolBusy || !activeTarget}
+                        className="btn-secondary mb-3 flex w-full items-center justify-center gap-2 px-3 py-2 text-[11px] disabled:opacity-35"
+                      >
+                        <SlidersHorizontalIcon className="h-3.5 w-3.5" />
+                        Copy Current Finish to Selected
+                      </button>
+                    )}
+                    <div className="space-y-3">
+                      {([
+                        ['sharpen', 'Sharpness', -100, 100],
+                        ['denoise', 'Texture', -100, 100],
+                        ['clarity', 'Clarity', -100, 100],
+                        ['brightness', 'Brightness', -100, 100],
+                        ['saturation', 'Saturation', -100, 100],
+                      ] as const).map(([key, label, min, max]) => (
+                        <label key={key} className="block">
+                          <span className="mb-1 flex items-center justify-between text-[11px] font-semibold text-[var(--color-text-muted)]">
+                            {label}
+                            <span className="rounded-md border border-[var(--color-border)] bg-black/20 px-1.5 py-0.5 text-[10px] text-[var(--color-text)]">{finishSettings[key]}</span>
+                          </span>
+                          <input
+                            type="range"
+                            min={min}
+                            max={max}
+                            value={finishSettings[key]}
+                            onChange={(event) => updateActiveFinishSetting(key, Number(event.target.value))}
+                            className="w-full accent-[var(--color-accent)]"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {activeTarget && (
+                    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-[var(--color-text-muted)]">Active photo</p>
+                      <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[11px]">
+                        <div className="rounded-lg bg-black/20 p-2">
+                          <span className="block text-[var(--color-text-muted)]">Score</span>
+                          <span className="font-bold text-[var(--color-text)]">{activeTarget.cullScore ?? '-'}</span>
+                        </div>
+                        <div className="rounded-lg bg-black/20 p-2">
+                          <span className="block text-[var(--color-text-muted)]">Rating</span>
+                          <span className="font-bold text-[var(--color-text)]">{activeTarget.rating ? `${activeTarget.rating} star` : '-'}</span>
+                        </div>
+                        <div className="rounded-lg bg-black/20 p-2">
+                          <span className="block text-[var(--color-text-muted)]">Pick</span>
+                          <span className="font-bold capitalize text-[var(--color-text)]">{activeTarget.pickStatus || '-'}</span>
+                        </div>
+                      </div>
+                      {activeTarget.flags?.length ? (
+                        <p className="mt-2 text-[11px] leading-5 text-amber-100/80">{activeTarget.flags.join(', ')}</p>
+                      ) : null}
+                    </div>
+                  )}
+
+                  {proToolMessage && (
+                    <div className="rounded-xl border border-[var(--color-border)] bg-black/20 p-3 text-[11px] leading-5 text-[var(--color-text-muted)]">
+                      {isProToolBusy && <RefreshCwIcon className="mr-2 inline h-3.5 w-3.5 animate-spin text-[var(--color-accent)]" />}
+                      {proToolMessage}
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </section>
 
           {/* Tethered Mode Section */}
@@ -2473,26 +3422,15 @@ Return one polished final image that looks like a single in-camera photograph.`;
         </div>
 
         {/* Action Footer */}
-        <div className="space-y-6 border-t border-[var(--color-border)] bg-[var(--color-header)] p-6">
+        <div className="space-y-4 border-t border-[var(--color-border)] bg-[var(--color-header)] p-5 shadow-[0_-18px_40px_rgba(0,0,0,0.22)]">
           <div>
               <div className="flex items-center justify-between mb-3">
                   <label className="text-xs font-semibold text-[var(--color-text-muted)]">Output frame</label>
-                  <span className="text-xs font-semibold text-[var(--color-accent)]">{aspectRatio || 'Original'}</span>
+                  <span className="text-xs font-semibold text-[var(--color-accent)]">Original locked</span>
               </div>
-              <div className="flex items-center gap-1 overflow-x-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1 no-scrollbar">
-                  {['1:1', '9:16', '16:9', '3:4', '4:3'].map((ratio) => (
-                      <button
-                          key={ratio}
-                          onClick={() => setAspectRatio(aspectRatio === ratio ? undefined : ratio as AspectRatio)}
-                          className={`flex-shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-                              aspectRatio === ratio
-                                  ? 'bg-[var(--color-accent)] text-black'
-                                  : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-white'
-                          }`}
-                      >
-                          {ratio}
-                      </button>
-                  ))}
+              <div className="flex items-center justify-between rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3 py-2">
+                  <p className="text-xs font-semibold text-[var(--color-text-muted)]">Same dimensions, crop, and subject placement as the target</p>
+                  <LockIcon className="h-4 w-4 shrink-0 text-[var(--color-accent)]" />
               </div>
           </div>
 

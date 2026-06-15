@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowRight,
+  Aperture,
   Box,
   Calendar,
   FolderOpen,
@@ -17,10 +18,11 @@ import {
   Wand2,
   Download,
 } from 'lucide-react';
-import type { AppView, ImageTransferState, Project, ReferenceTemplate } from '../types';
+import type { AppView, ImageState, ImageTransferState, Project, ReferenceTemplate } from '../types';
 import { Logo } from '@/components/icons';
 import type { ProjectStorageInfo } from '../services/db';
 import { referenceTemplates } from '../data/referenceTemplates';
+import { getImageSrc } from '../services/imageAssets';
 
 interface DashboardViewProps {
   onNavigate: (view: AppView) => void;
@@ -50,7 +52,10 @@ const getProjectOutputCount = (project: Project) => {
   const historyCount = Array.isArray(project.state?.generationHistory)
     ? project.state.generationHistory.length
     : 0;
-  return Math.max(historyCount, project.generatedImages?.length || 0);
+  const colorGradeCount = Array.isArray(project.state?.colorGrade?.outputs)
+    ? project.state.colorGrade.outputs.length
+    : 0;
+  return Math.max(historyCount, colorGradeCount, project.generatedImages?.length || 0);
 };
 
 const getProjectCoverImages = (project: Project) => {
@@ -61,6 +66,13 @@ const getProjectCoverImages = (project: Project) => {
     return project.state.generationHistory
       .map((item: { generated?: string }) => item.generated)
       .filter((image: string | undefined): image is string => Boolean(image))
+      .slice(0, 4);
+  }
+
+  if (Array.isArray(project.state?.colorGrade?.outputs)) {
+    return project.state.colorGrade.outputs
+      .map((item: { image?: ImageState }) => item.image ? getImageSrc(item.image) : null)
+      .filter((image: string | null): image is string => Boolean(image))
       .slice(0, 4);
   }
 
@@ -419,6 +431,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       <Palette className="h-3.5 w-3.5 text-[var(--color-accent)]" />
                       Reference Edit
                     </button>
+                    <button type="button" onClick={() => onNavigate('color-grade')} className="studio-chip inline-flex items-center gap-2 rounded-[12px] px-4 py-2 text-xs font-extrabold">
+                      <Aperture className="h-3.5 w-3.5 text-[var(--color-accent-tertiary)]" />
+                      Color Grade
+                    </button>
                     <button type="button" onClick={() => onNavigate('virtual-set')} className="studio-chip inline-flex items-center gap-2 rounded-[12px] px-4 py-2 text-xs font-extrabold">
                       <Box className="h-3.5 w-3.5 text-[var(--color-accent-secondary)]" />
                       Virtual Set
@@ -456,7 +472,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <StatCard label="Virtual sets" value={String(virtualSetProjects.length)} icon={<Box className="h-4 w-4" />} accent="var(--color-accent-tertiary)" />
         </section>
 
-        <section className="grid gap-4 lg:grid-cols-2">
+        <section className="grid gap-4 lg:grid-cols-3">
           <button
             type="button"
             onClick={() => setIsCreateModalOpen(true)}
@@ -474,6 +490,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </p>
               </div>
               <ArrowRight className="mt-2 h-5 w-5 text-[var(--color-accent)] transition-transform group-hover:translate-x-1" />
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigate('color-grade')}
+            disabled={!canCreateProjects}
+            className="group studio-panel-glow rounded-2xl premium-panel p-5 text-left disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-400/10 text-[var(--color-accent-tertiary)]">
+                  <Aperture className="h-5 w-5" />
+                </span>
+                <h2 className="mt-5 text-xl font-black text-[var(--color-text)]">Color Grade</h2>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-text-muted)]">
+                  Match the palette, contrast, and light structure of a reference while keeping every subject pixel and detail in place.
+                </p>
+              </div>
+              <ArrowRight className="mt-2 h-5 w-5 text-[var(--color-accent-tertiary)] transition-transform group-hover:translate-x-1" />
             </div>
           </button>
 

@@ -1,7 +1,7 @@
 
 // --- General App Types ---
 
-export type AppView = 'dashboard' | 'style-transfer' | 'virtual-set';
+export type AppView = 'dashboard' | 'style-transfer' | 'color-grade' | 'virtual-set';
 
 export interface ImageState {
   fileName: string | null;
@@ -11,6 +11,125 @@ export interface ImageState {
   height?: number | null;
   assetPath?: string | null;
   assetUrl?: string | null;
+}
+
+export type ProAiAcceleration = 'directml' | 'webgpu' | 'cpu' | 'unavailable';
+
+export interface ProAiModelStatus {
+  id: string;
+  task: string;
+  installed: boolean;
+  path?: string;
+  inputSize?: number;
+}
+
+export interface ProToolStatus {
+  available: boolean;
+  installed: boolean;
+  runtimeReady: boolean;
+  acceleration: ProAiAcceleration;
+  message: string;
+  models: ProAiModelStatus[];
+}
+
+export interface ProCullResult {
+  score: number;
+  pickStatus: 'pick' | 'review' | 'reject';
+  rating: number;
+  flags: string[];
+  sharpnessScore: number;
+  exposureScore: number;
+  contrastScore: number;
+  faceCount: number | null;
+  eyeStatus: string;
+  analyzedAt: number;
+}
+
+export interface ProToolImageResult {
+  image: ImageState;
+  mask?: ImageState;
+  modelUsed?: string;
+  message: string;
+  settings?: Record<string, unknown>;
+}
+
+export interface ProFinishSettings {
+  sharpen: number;
+  denoise: number;
+  clarity: number;
+  brightness: number;
+  saturation: number;
+}
+
+// --- Color Grade Studio ---
+
+export type ColorMatchMethod = 'auto' | 'natural' | 'histogram' | 'reinhard' | 'distribution' | 'hybrid' | 'lab' | 'pdf';
+export type ResolvedColorMatchMethod = Exclude<ColorMatchMethod, 'auto'>;
+
+export interface ColorGradeDiagnostics {
+  engineVersion: string;
+  selectedStrategy: ResolvedColorMatchMethod;
+  confidence: number;
+  overallScore: number;
+  toneScore: number;
+  colorScore: number;
+  contrastScore: number;
+  detailScore: number;
+  clippingScore: number;
+  clippedShadows: number;
+  clippedHighlights: number;
+  analyzedAt: number;
+}
+
+export interface ColorGradeSettings {
+  matchMethod: ColorMatchMethod;
+  autoMethod: ResolvedColorMatchMethod;
+  matchStrength: number;
+  luminanceMatch: number;
+  colorMatch: number;
+  contrastMatch: number;
+  detailProtection: number;
+  exposure: number;
+  brightness: number;
+  contrast: number;
+  gamma: number;
+  highlights: number;
+  shadows: number;
+  whites: number;
+  blacks: number;
+  temperature: number;
+  tint: number;
+  vibrance: number;
+  saturation: number;
+  clarity: number;
+  sharpness: number;
+  shadowColor: string;
+  shadowColorStrength: number;
+  midtoneColor: string;
+  midtoneColorStrength: number;
+  highlightColor: string;
+  highlightColorStrength: number;
+  fade: number;
+  vignette: number;
+  grain: number;
+}
+
+export interface ColorGradeOutput {
+  id: string;
+  image: ImageState;
+  createdAt: number;
+  settings: ColorGradeSettings;
+  diagnostics?: ColorGradeDiagnostics | null;
+}
+
+export interface ColorGradeProjectState {
+  targetImage: ImageState;
+  referenceImage: ImageState;
+  settings: ColorGradeSettings;
+  outputs: ColorGradeOutput[];
+  matchSummary?: string | null;
+  matchAnalyzedAt?: number | null;
+  matchDiagnostics?: ColorGradeDiagnostics | null;
 }
 
 export interface ImageTransferState {
@@ -263,11 +382,27 @@ export interface ReferenceTemplate {
 }
 
 export type ExportFormat = 'png' | 'jpeg';
-export type AspectRatio = '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
+export type AspectRatio =
+  | '1:1'
+  | '1:4'
+  | '1:8'
+  | '2:3'
+  | '3:2'
+  | '3:4'
+  | '4:1'
+  | '4:3'
+  | '4:5'
+  | '5:4'
+  | '8:1'
+  | '9:16'
+  | '16:9'
+  | '21:9';
 
 export interface GenerationSettingsSnapshot {
   aspectRatio?: AspectRatio | null;
   anchorImageId?: string | null;
+  promptEdit?: string;
+  referenceFileNames?: string[];
   selectedCategories: {
     id: string;
     label: string;
@@ -296,6 +431,17 @@ export interface BatchImage {
     dominantColor: string | null;
     source?: 'manual' | 'tether';
     tetherCaptureId?: string;
+    rating?: number;
+    pickStatus?: 'pick' | 'review' | 'reject';
+    cullScore?: number;
+    flags?: string[];
+    sharpnessScore?: number;
+    exposureScore?: number;
+    contrastScore?: number;
+    faceCount?: number | null;
+    eyeStatus?: string | null;
+    proofNotes?: string;
+    finishSettings?: ProFinishSettings;
 }
 
 // --- Style Transfer ---

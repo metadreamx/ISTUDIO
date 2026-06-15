@@ -14,12 +14,14 @@ import {
   HelpCircleIcon,
   XIcon,
   CheckCircle2Icon,
-  SparklesIcon,
-  ImagesIcon
+  ImagesIcon,
+  MonitorIcon,
+  ApertureIcon
 } from 'lucide-react';
 
 const DashboardView = lazy(() => import('@/components/DashboardView').then((module) => ({ default: module.DashboardView })));
 const StyleTransferView = lazy(() => import('@/components/StyleTransferView').then((module) => ({ default: module.StyleTransferView })));
+const ColorGradeView = lazy(() => import('@/components/ColorGradeView').then((module) => ({ default: module.ColorGradeView })));
 const VirtualSetView = lazy(() => import('@/components/VirtualSetView').then((module) => ({ default: module.VirtualSetView })));
 
 declare global {
@@ -43,7 +45,7 @@ const NavButton: React.FC<{
   return (
       <button
           onClick={() => onNavigate(view)}
-          className={`studio-nav-pill relative inline-flex h-10 shrink-0 items-center gap-2 px-3.5 text-sm font-extrabold ${
+          className={`studio-nav-pill relative inline-flex h-10 shrink-0 items-center gap-2 px-2.5 text-xs font-extrabold xl:px-3.5 xl:text-sm ${
               isActive ? 'studio-nav-pill-active' : 'text-[var(--color-text-muted)] hover:bg-white/[0.055] hover:text-[var(--color-text)]'
           }`}
           aria-label={label}
@@ -364,7 +366,12 @@ const App: React.FC = () => {
       setProjects(prev => prev.map(item => item.id === fullProject.id ? fullProject : item));
       const hasVirtualSetState = Array.isArray(fullProject.state?.virtualSet?.scenes) && fullProject.state.virtualSet.scenes.length > 0;
       const hasReferenceEditState = Boolean(fullProject.state?.referenceImage || fullProject.state?.targetImages?.length);
-      setActiveView(hasVirtualSetState && !hasReferenceEditState ? 'virtual-set' : 'style-transfer');
+      const hasColorGradeState = Boolean(fullProject.state?.colorGrade?.targetImage?.assetPath || fullProject.state?.colorGrade?.targetImage?.base64);
+      setActiveView(hasColorGradeState && !hasReferenceEditState
+        ? 'color-grade'
+        : hasVirtualSetState && !hasReferenceEditState
+          ? 'virtual-set'
+          : 'style-transfer');
     } catch (error) {
       console.error("Failed to open project", error);
       setToast("Could not open project");
@@ -554,6 +561,13 @@ const App: React.FC = () => {
               storageMode={storageMode}
             />
           ) : renderApiKeyRequired())}
+          {activeView === 'color-grade' && (
+            <ColorGradeView
+              project={currentProject}
+              onUpdateProject={handleUpdateProject}
+              onCreateProject={(name, initialState) => createProject(name, 'color-grade', initialState)}
+            />
+          )}
           {activeView === 'virtual-set' && (
             <VirtualSetView
               project={currentProject}
@@ -571,94 +585,112 @@ const App: React.FC = () => {
 
   return (
     <MotionConfig reducedMotion="user" transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}>
-    <div className="app-shell-grid relative flex h-[100dvh] w-screen flex-col overflow-hidden text-[var(--color-text)] font-sans antialiased">
-      <header className="studio-topbar relative z-40 flex min-h-[68px] items-center gap-4 px-3 sm:px-5">
-        <button
-          onClick={() => handleNavigate('dashboard')}
-          className="group flex h-11 w-11 shrink-0 items-center justify-center rounded-[12px] border border-white/10 bg-white/[0.06] text-[var(--color-accent)] shadow-[0_14px_35px_rgba(0,0,0,0.28)] hover:bg-white/[0.09]"
-          aria-label="Go to Dashboard"
-        >
-          <Logo className="h-6 w-6 transition-transform duration-300 group-hover:rotate-[-6deg] group-hover:scale-105" />
-        </button>
-
-        <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar">
-          <NavButton view="dashboard" label="Explore" icon={<LayoutDashboardIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
-          <NavButton view="style-transfer" label="Reference Edit" icon={<PaletteIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} badge="Pro" />
-          <NavButton view="virtual-set" label="Virtual Set" icon={<BoxIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} badge={storageMode === 'browser' ? 'iPad' : undefined} />
-        </nav>
-
-        <div className="flex shrink-0 items-center gap-2">
-          {activeView !== 'dashboard' && (
-            <div className="hidden max-w-[260px] items-center gap-2 rounded-[12px] border border-white/10 bg-white/[0.055] px-3 py-2 text-xs text-[var(--color-text-muted)] md:flex">
-              <ImagesIcon className="h-3.5 w-3.5 text-[var(--color-accent-secondary)]" />
-              <span className="truncate">{currentProject?.name || 'Live session'}</span>
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => setIsApiKeyModalOpen(true)}
-            className={`hidden items-center gap-2 rounded-[12px] border px-3 py-2 text-xs font-extrabold sm:flex ${
-              hasApiKey ? 'border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 text-[var(--color-accent)]' : 'border-amber-500/20 bg-amber-500/10 text-amber-300'
-            }`}
-          >
-            <span className={`h-1.5 w-1.5 rounded-full ${hasApiKey ? 'bg-[var(--color-accent)]' : 'bg-amber-400'}`} />
-            {hasApiKey ? 'AI Ready' : 'Connect AI'}
-          </button>
-          <Tooltip text="Settings">
-            <button
-              onClick={() => setIsApiKeyModalOpen(true)}
-              className="flex h-10 w-10 items-center justify-center rounded-[12px] border border-white/10 bg-white/[0.055] text-[var(--color-text-muted)] hover:bg-white/[0.09] hover:text-[var(--color-text)]"
-              aria-label="Settings"
-            >
-              <SettingsIcon className="h-4 w-4" />
-            </button>
-          </Tooltip>
-          <Tooltip text="System info">
-            <button
-              onClick={() => setIsInfoPanelOpen(true)}
-              className="flex h-10 w-10 items-center justify-center rounded-[12px] border border-white/10 bg-white/[0.055] text-[var(--color-text-muted)] hover:bg-white/[0.09] hover:text-[var(--color-text)]"
-              aria-label="System info"
-            >
-              <HelpCircleIcon className="h-4 w-4" />
-            </button>
-          </Tooltip>
-          <div className="hidden h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-[#151719] text-[var(--color-accent)] shadow-[0_14px_35px_rgba(0,0,0,0.24)] lg:flex">
-            <SparklesIcon className="h-4 w-4" />
+    <div className="desktop-only-shell h-screen w-screen overflow-hidden bg-[var(--color-bg)] text-[var(--color-text)]">
+      <div className="desktop-required h-full w-full items-center justify-center p-8 text-center">
+        <div className="max-w-md rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-8 shadow-[var(--shadow-pop)]">
+          <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-xl border border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
+            <MonitorIcon className="h-7 w-7" />
           </div>
+          <h1 className="text-2xl font-extrabold">Open ISTUDIO on desktop</h1>
+          <p className="mt-3 text-sm leading-6 text-[var(--color-text-muted)]">
+            ISTUDIO is designed for a full desktop workspace. Use a window at least 900 pixels wide to access the editor.
+          </p>
         </div>
-      </header>
+      </div>
 
-      <main className="relative z-10 min-h-0 flex-1 overflow-hidden">
-        {renderContent()}
-      </main>
+      <div className="desktop-app app-shell-grid relative flex h-screen min-w-[900px] flex-col overflow-hidden font-sans antialiased">
+        <header className="studio-topbar relative z-40 flex min-h-[72px] items-center gap-5 px-5">
+          <button
+            onClick={() => handleNavigate('dashboard')}
+            className="group flex shrink-0 items-center gap-3 rounded-xl border border-white/10 bg-white/[0.055] p-2 text-left shadow-[0_14px_35px_rgba(0,0,0,0.28)] hover:bg-white/[0.09] xl:pr-4"
+            aria-label="Go to Dashboard"
+          >
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-black/40 text-[var(--color-accent)]">
+              <Logo className="h-5 w-5 transition-transform duration-300 group-hover:rotate-[-6deg] group-hover:scale-105" />
+            </span>
+            <span className="hidden xl:block">
+              <span className="block text-sm font-extrabold leading-none text-white">ISTUDIO</span>
+              <span className="mt-1 block text-[10px] font-semibold text-[var(--color-text-muted)]">Iconic Recordings</span>
+            </span>
+          </button>
 
-      <ApiKeyModal
-        isOpen={isApiKeyModalOpen}
-        onClose={() => setIsApiKeyModalOpen(false)}
-        onSave={handleSaveApiKey}
-      />
-      <AnimatePresence>
-        {isInfoPanelOpen && (
-          <InfoPanel
-            isOpen={isInfoPanelOpen}
-            onClose={() => setIsInfoPanelOpen(false)}
-            projectCount={projects.length}
-            historyCount={getProjectGenerationCount(projects)}
-            hasApiKey={hasApiKey}
-            storageInfo={projectStorageInfo}
-          />
+          <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-xl border border-white/[0.07] bg-black/20 p-1">
+            <NavButton view="dashboard" label="Explore" icon={<LayoutDashboardIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
+            <NavButton view="style-transfer" label="Reference Edit" icon={<PaletteIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} badge="Pro" />
+            <NavButton view="color-grade" label="Color Grade" icon={<ApertureIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
+            <NavButton view="virtual-set" label="Virtual Set" icon={<BoxIcon className="h-4 w-4" />} activeView={activeView} onNavigate={handleNavigate} />
+          </nav>
+
+          <div className="flex shrink-0 items-center gap-2">
+            {activeView !== 'dashboard' && (
+              <div className="hidden max-w-[260px] items-center gap-2 rounded-xl border border-white/10 bg-white/[0.045] px-3 py-2.5 text-xs text-[var(--color-text-muted)] xl:flex">
+                <ImagesIcon className="h-3.5 w-3.5 text-[var(--color-accent-secondary)]" />
+                <span className="truncate">{currentProject?.name || 'Live session'}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsApiKeyModalOpen(true)}
+              className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-extrabold ${
+                hasApiKey ? 'border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 text-[var(--color-accent)]' : 'border-amber-500/20 bg-amber-500/10 text-amber-300'
+              }`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${hasApiKey ? 'bg-[var(--color-accent)]' : 'bg-amber-400'}`} />
+              {hasApiKey ? 'AI Ready' : 'Connect AI'}
+            </button>
+            <Tooltip text="Settings">
+              <button
+                onClick={() => setIsApiKeyModalOpen(true)}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.055] text-[var(--color-text-muted)] hover:bg-white/[0.09] hover:text-[var(--color-text)]"
+                aria-label="Settings"
+              >
+                <SettingsIcon className="h-4 w-4" />
+              </button>
+            </Tooltip>
+            <Tooltip text="System info">
+              <button
+                onClick={() => setIsInfoPanelOpen(true)}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.055] text-[var(--color-text-muted)] hover:bg-white/[0.09] hover:text-[var(--color-text)]"
+                aria-label="System info"
+              >
+                <HelpCircleIcon className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          </div>
+        </header>
+
+        <main className="relative z-10 min-h-0 flex-1 overflow-hidden">
+          {renderContent()}
+        </main>
+
+        <ApiKeyModal
+          isOpen={isApiKeyModalOpen}
+          onClose={() => setIsApiKeyModalOpen(false)}
+          onSave={handleSaveApiKey}
+        />
+        <AnimatePresence>
+          {isInfoPanelOpen && (
+            <InfoPanel
+              isOpen={isInfoPanelOpen}
+              onClose={() => setIsInfoPanelOpen(false)}
+              projectCount={projects.length}
+              historyCount={getProjectGenerationCount(projects)}
+              hasApiKey={hasApiKey}
+              storageInfo={projectStorageInfo}
+            />
+          )}
+        </AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-6 right-6 z-50 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-5 py-3 text-sm text-[var(--color-text)] shadow-2xl"
+          >
+            {toast}
+          </motion.div>
         )}
-      </AnimatePresence>
-      {toast && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 20 }}
-          className="fixed bottom-6 right-6 z-50 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-5 py-3 text-sm text-[var(--color-text)] shadow-2xl"
-        >
-          {toast}
-        </motion.div>
-      )}
+      </div>
     </div>
     </MotionConfig>
   );

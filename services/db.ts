@@ -1,5 +1,14 @@
 import JSZip from 'jszip';
-import type { HistoryItem, ImageState, Project, ProjectStorageMode, TetherStatus } from '../types';
+import type {
+    ColorGradeDiagnostics,
+    ColorGradeSettings,
+    HistoryItem,
+    ImageState,
+    Project,
+    ProjectStorageMode,
+    TetherStatus,
+} from '../types';
+import type { ColorGradeLutRecipe } from './colorGrade';
 
 const DB_NAME = 'StyleTransferDB';
 const DB_VERSION = 4;
@@ -475,9 +484,13 @@ export async function saveProjectAsset(
     projectId: string,
     image: ImageState,
     bucket: 'reference' | 'targets' | 'outputs' | 'assets' | 'tether/inbox' = 'assets',
+    matchFrame?: { width: number; height: number },
 ): Promise<ImageState> {
     if (isBrowserProjectStorage()) {
-        return await saveBrowserImageAsset(projectId, image, bucket);
+        const normalizedImage = matchFrame
+            ? await normalizeBrowserImageFrame(image, matchFrame)
+            : image;
+        return await saveBrowserImageAsset(projectId, normalizedImage, bucket);
     }
 
     return await apiRequest<ImageState>(`${PROJECTS_API}/${encodeURIComponent(projectId)}/assets`, {
@@ -489,6 +502,95 @@ export async function saveProjectAsset(
             mimeType: image.mimeType,
             width: image.width ?? null,
             height: image.height ?? null,
+            matchFrame,
+        }),
+    }, 120000);
+}
+
+async function normalizeBrowserImageFrame(
+    image: ImageState,
+    frame: { width: number; height: number },
+): Promise<ImageState> {
+    const source = image.base64 && image.mimeType
+        ? `data:${image.mimeType};base64,${image.base64}`
+        : image.assetUrl;
+    if (!source) return image;
+
+    const loaded = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const element = new Image();
+        element.onload = () => resolve(element);
+        element.onerror = () => reject(new Error('Could not fit the generated image to the original frame.'));
+        element.src = source;
+    });
+    const width = Math.max(1, Math.round(frame.width));
+    const height = Math.max(1, Math.round(frame.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) return image;
+
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(
+        loaded,
+        0,
+        0,
+        loaded.naturalWidth,
+        loaded.naturalHeight,
+        0,
+        0,
+        width,
+        height,
+    );
+    const dataUrl = canvas.toDataURL('image/png');
+    return {
+        ...image,
+        base64: dataUrl.split(',')[1] || image.base64,
+        mimeType: 'image/png',
+        width,
+        height,
+    };
+}
+
+export async function renderProjectColorGrade(
+    projectId: string,
+    target: ImageState,
+    reference: ImageState | null,
+    recipe: ColorGradeLutRecipe,
+    format: 'png' | 'jpeg' | 'webp',
+    fileName: string,
+): Promise<{ image: ImageState; diagnostics: ColorGradeDiagnostics | null; engineVersion: string; width: number; height: number }> {
+    if (isBrowserProjectStorage()) {
+        throw new Error('Full-resolution Master Match rendering is available in the ISTUDIO desktop app.');
+    }
+    return await apiRequest(`${'/api/color-grade/render'}`, {
+        method: 'POST',
+        body: JSON.stringify({
+            projectId,
+            target,
+            reference,
+            recipe,
+            format,
+            fileName,
+        }),
+    }, 300000);
+}
+
+export async function analyzeProjectColorGrade(
+    projectId: string,
+    target: ImageState,
+    reference: ImageState | null,
+    settings: ColorGradeSettings,
+): Promise<unknown> {
+    if (isBrowserProjectStorage()) return null;
+    return await apiRequest('/api/color-grade/analyze', {
+        method: 'POST',
+        body: JSON.stringify({
+            projectId,
+            target,
+            reference,
+            recipe: { version: '2.0.0', settings },
         }),
     }, 120000);
 }

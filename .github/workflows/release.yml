@@ -34,6 +34,7 @@ jobs:
           name: ISTUDIO-windows-release
           path: |
             release/INSTALL-ISTUDIO.bat
+            release/ISTUDIO-ProTools-windows.zip
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/')
@@ -52,15 +53,21 @@ jobs:
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag release/INSTALL-ISTUDIO.bat --clobber
+            if (Test-Path "release/ISTUDIO-ProTools-windows.zip") {
+              gh release upload $tag release/ISTUDIO-ProTools-windows.zip --clobber
+            }
             gh release edit $tag @notesArgs
           } else {
             gh release create $tag release/INSTALL-ISTUDIO.bat --title "ISTUDIO $tag" @notesArgs
+            if (Test-Path "release/ISTUDIO-ProTools-windows.zip") {
+              gh release upload $tag release/ISTUDIO-ProTools-windows.zip --clobber
+            }
           }
 
           $releases = gh api "repos/${{ github.repository }}/releases?per_page=100" | ConvertFrom-Json
           foreach ($release in $releases) {
             foreach ($asset in $release.assets) {
-              if ($asset.name -ne "INSTALL-ISTUDIO.bat") {
+              if ($asset.name -ne "INSTALL-ISTUDIO.bat" -and $asset.name -ne "ISTUDIO-ProTools-windows.zip") {
                 gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$($asset.id)" *> $null
               }
             }

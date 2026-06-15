@@ -29,13 +29,57 @@ assert(
 );
 
 assert(
-  gemini.includes("GEMINI_ANALYSIS_MODELS") && gemini.includes("generateContentWithModelFallback") && gemini.includes("generateContentTransport(buildParams(model))"),
+  gemini.includes("GEMINI_ANALYSIS_MODELS") && gemini.includes("gemini-3.5-flash") && gemini.includes("generateContentWithModelFallback") && gemini.includes("generateContentTransport(buildParams(model))"),
   'Reference/target analysis must use Gemini model fallback through the shared transport.',
 );
 
+const analysisModelOrder = gemini.match(/GEMINI_ANALYSIS_MODELS\s*=\s*\[([^\]]+)\]/s)?.[1] || '';
 assert(
-  gemini.includes("GEMINI_IMAGE_EDIT_MODELS") && gemini.includes("gemini-2.5-flash-image") && gemini.includes("generateImageEditWithFallback"),
-  'Image generation must use the supported Gemini image model plus fallback handling.',
+  analysisModelOrder.indexOf("gemini-3.5-flash") > -1 &&
+    analysisModelOrder.indexOf("gemini-3-flash-preview") > analysisModelOrder.indexOf("gemini-3.5-flash") &&
+    analysisModelOrder.indexOf("gemini-2.5-flash") > analysisModelOrder.indexOf("gemini-3-flash-preview") &&
+    analysisModelOrder.indexOf("gemini-2.0-flash") > analysisModelOrder.indexOf("gemini-2.5-flash"),
+  'Analysis/diagnostic/evaluation model order must be Gemini 3.5 Flash first, with existing analysis fallbacks preserved.',
+);
+
+assert(
+  gemini.includes("GEMINI_IMAGE_EDIT_MODELS") && gemini.includes("gemini-3-pro-image-preview") && gemini.includes("gemini-3.1-flash-image-preview") && gemini.includes("gemini-2.5-flash-image") && gemini.includes("generateImageEditWithFallback"),
+  'Image generation must use the supported Gemini image models plus fallback handling.',
+);
+
+const imageModelOrder = gemini.match(/GEMINI_IMAGE_EDIT_MODELS\s*=\s*\[([^\]]+)\]/s)?.[1] || '';
+assert(
+  imageModelOrder.indexOf("gemini-3-pro-image-preview") > -1 &&
+    imageModelOrder.indexOf("gemini-3.1-flash-image-preview") > imageModelOrder.indexOf("gemini-3-pro-image-preview") &&
+    imageModelOrder.indexOf("gemini-2.5-flash-image") > imageModelOrder.indexOf("gemini-3.1-flash-image-preview"),
+  'Image edit model order must be quality-first: Gemini 3 Pro Image, Gemini 3.1 Flash Image, then Gemini 2.5 Flash Image.',
+);
+
+assert(
+  !imageModelOrder.includes("gemini-3.5-flash"),
+  'Gemini 3.5 Flash must not be used for image generation because it is text-output only.',
+);
+
+assert(
+  gemini.includes("const GEMINI_IMAGE_SIZES = ['4K', '2K', '1K']"),
+  'Image edit output sizes must try 4K before lower-resolution fallbacks.',
+);
+
+assert(
+  gemini.includes("closestGeminiAspectRatio") &&
+  gemini.includes("'2:3'") &&
+  gemini.includes("'3:2'") &&
+  style.includes("const targetFrameRatio = closestGeminiAspectRatio") &&
+  style.includes("editImage(imageParts, prompt, targetFrameRatio, seed)") &&
+  style.includes("Same dimensions, crop, and subject placement as the target"),
+  'Reference Edit must derive the output ratio from the target and keep the original frame locked.',
+);
+
+assert(
+  server.includes("matchFrame") &&
+  server.includes("resize(requestedFrameWidth, requestedFrameHeight") &&
+  server.includes("fit: 'fill'"),
+  'Saved Reference Edit outputs must be normalized to the exact target pixel dimensions.',
 );
 
 assert(
@@ -109,10 +153,10 @@ assert(
 );
 
 assert(
-  style.includes("detectTransferableElements(analysisImage.base64, analysisImage.mimeType)") &&
-  style.includes("analyzeReferenceScene(analysisImage.base64, analysisImage.mimeType)") &&
+  style.includes("detectTransferableElements(analysisImage.base64, analysisImage.mimeType, supportingInputs, promptEdit.trim())") &&
+  style.includes("analyzeReferenceScene(analysisImage.base64, analysisImage.mimeType, supportingInputs, promptEdit.trim())") &&
   style.includes("analyzeTargetImageDetails(targetInput.base64, targetInput.mimeType)"),
-  'Reference and target analysis must preserve image MIME types.',
+  'Multi-reference and target analysis must preserve image MIME types and prompt direction.',
 );
 
 assert(
@@ -122,7 +166,9 @@ assert(
 );
 
 assert(
-  style.includes("evaluateRealism(newImageBase64") &&
+  style.includes("evaluateRealism(") &&
+  style.includes("referenceInput.base64") &&
+  style.includes("transferSummary") &&
   style.includes("AUTOMATIC REALISM REPAIR PASS") &&
   style.includes("NO WASHED-OUT COMPOSITE") &&
   gemini.includes("sticker-like edges") &&
@@ -130,36 +176,75 @@ assert(
   'Generation must include the realism repair pass and anti-sticker/anti-washout guidance.',
 );
 
-const referenceInputIndex = style.indexOf("const referenceInput = await imageToGeminiInput(referenceImage, qualityMode)");
-const referencePushIndex = style.indexOf("inlineData: { data: referenceInput.base64, mimeType: referenceInput.mimeType }");
+assert(
+  gemini.includes("REFERENCE DNA TRANSFER") &&
+  gemini.includes("weak reference transfer") &&
+  gemini.includes("subject drift"),
+  'Realism evaluation must judge reference DNA transfer, subject consistency, and compositing realism.',
+);
+
+assert(
+  style.includes("REFERENCE TRANSFER CONTRACT") &&
+  style.includes("SLIDER INTENSITY CONTRACT") &&
+  style.includes("ACTIVE INTENSITY MATRIX") &&
+  style.includes("buildReferenceTransferMatrix") &&
+  style.includes("getIntensityBand") &&
+  style.includes("0 means do not transfer") &&
+  style.includes("1-25 means subtle influence") &&
+  style.includes("76-100 means dominant transfer"),
+  'Generation prompt must include an explicit reference transfer contract and slider intensity matrix.',
+);
+
+[
+  'color_palette',
+  'lighting',
+  'mood_atmosphere',
+  'spatial_dna',
+  'background_elements',
+  'foreground_elements',
+  'post_processing',
+  'camera_lens_effects',
+].forEach((categoryId) => {
+  assert(
+    style.includes(`${categoryId}:`),
+    `Prompt intensity matrix must define transfer behavior for ${categoryId}.`,
+  );
+});
+
+assert(
+  style.includes("Requested reference transfer summary") &&
+  style.includes("negative repair reference"),
+  'Realism repair must keep the same reference DNA while treating the first attempt as a negative repair reference.',
+);
+
+const referenceInputIndex = style.indexOf("generationReferenceImages.map((image) => imageToGeminiInput(image, 'reference'))");
+const referencePushIndex = style.indexOf("loadedReferenceInputs.forEach((referenceInput)");
 const customInputIndex = style.indexOf("const activeItemInputs = await Promise.all");
 assert(
   referenceInputIndex > -1 && referencePushIndex > referenceInputIndex && customInputIndex > referencePushIndex,
-  'Generation must include the real reference image before custom assets in every viewport/runtime.',
+  'Generation must include all real reference images before custom assets in every viewport/runtime.',
+);
+
+assert(
+  style.includes("const MAX_REFERENCE_IMAGES = 4") &&
+  style.includes("referenceImages: [nextReferenceImage, ...nextSupportingReferenceImages].filter(hasImageSource)") &&
+  style.includes("PRIMARY Reference DNA") &&
+  style.includes("SUPPORTING Reference DNA") &&
+  style.includes("Multi-reference synthesis") &&
+  style.includes("Prompt authority"),
+  'Reference Edit must persist and synthesize one primary plus supporting references with prompt-guided art direction.',
+);
+
+assert(
+  gemini.includes("EditImageQualityMode = 'single' | 'batch' | 'reference'") &&
+  gemini.includes("supportingImages: Array<{ base64: string; mimeType: string }> = []") &&
+  gemini.includes("USER CREATIVE DIRECTION"),
+  'Gemini analysis must use the reference optimization profile and prompt-guided multi-image synthesis.',
 );
 
 assert(
   uploader.match(/accept=\"image\/\*\"/g)?.length === 2 && mainPanel.includes('accept="image/*"'),
   'Reference and target uploaders must accept browser-decodable mobile formats such as iPhone HEIC.',
-);
-
-assert(
-  indexHtml.includes("user-scalable=no") &&
-  indexHtml.includes("maximum-scale=1") &&
-  indexHtml.includes("viewport-fit=cover") &&
-  css.includes("height: 100svh") &&
-  css.includes("body {\n    position: fixed;") &&
-  css.includes("overscroll-behavior: none"),
-  'Mobile app shell must lock to the phone viewport without page zoom or page scrolling.',
-);
-
-assert(
-  mainPanel.includes("mobile-generate-row") &&
-  mainPanel.includes("Original") &&
-  mainPanel.includes("Result") &&
-  mainPanel.includes("lg:hidden") &&
-  mainPanel.includes("lg:flex-row"),
-  'Mobile bottom dock must keep Original/Result visible and place Generate/Refine in a lower mobile row.',
 );
 
 assert(

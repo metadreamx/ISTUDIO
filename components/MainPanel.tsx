@@ -102,18 +102,17 @@ const ImageStrip: React.FC<{
 
     if (images.length === 0) return null;
 
-    const renderThumb = (image: BatchImage, index: number, size: 'compact' | 'desktop') => {
+    const renderThumb = (image: BatchImage, index: number) => {
         const isActive = index === activeIndex;
         const isSelected = selectedIds.has(image.id);
         const targetSrc = getImageSrc(image.target);
         const generatedSrc = image.generated;
-        const isCompact = size === 'compact';
 
         return (
-            <div key={`${size}-${image.id}`} ref={isActive ? activeRef : null} className="relative flex-shrink-0 group">
+            <div key={image.id} ref={isActive ? activeRef : null} className="relative flex-shrink-0 group">
                 <button
                     onClick={() => onSelect(index)}
-                    className={`${isCompact ? 'h-20 w-16 rounded-xl' : 'h-14 w-14 rounded-lg'} overflow-hidden border bg-black/35 transition-all duration-300 ${
+                    className={`h-14 w-14 overflow-hidden rounded-lg border bg-black/35 transition-all duration-300 ${
                         isActive
                             ? 'border-[var(--color-accent)] opacity-100 shadow-[0_0_0_3px_rgba(var(--color-accent-rgb),0.12)]'
                             : 'border-[var(--color-border)] opacity-65 hover:border-[var(--color-border-hover)] hover:opacity-100'
@@ -126,14 +125,14 @@ const ImageStrip: React.FC<{
 
                 <button
                     onClick={(e) => { e.stopPropagation(); onToggleSelection(image.id); }}
-                    className={`absolute left-1 top-1 z-30 flex ${isCompact ? 'h-5 w-5 rounded-md' : 'h-4 w-4 rounded-sm'} items-center justify-center border transition-all ${
+                    className={`absolute left-1 top-1 z-30 flex h-4 w-4 items-center justify-center rounded-sm border transition-all ${
                         isSelected
                             ? 'bg-[var(--color-accent)] border-[var(--color-accent)] text-black opacity-100'
                             : 'bg-black/70 border-white/20 text-transparent hover:border-[var(--color-accent)] opacity-0 group-hover:opacity-100'
                     }`}
                     aria-label={`Select image ${index + 1} for batching`}
                 >
-                    <CheckIcon className={isCompact ? 'h-3 w-3' : 'h-2.5 w-2.5'} />
+                    <CheckIcon className="h-2.5 w-2.5" />
                 </button>
 
                 {(image.status !== 'pending' && image.status !== 'done' || generatedSrc) && (
@@ -146,35 +145,33 @@ const ImageStrip: React.FC<{
                         {image.status === 'error' && <XCircleIcon className="h-5 w-5 text-red-500" />}
                     </div>
                 )}
-                {image.status === 'done' && <CheckCircleIcon className={`absolute right-0 top-0 z-20 ${isCompact ? 'h-4 w-4' : 'h-3 w-3'} rounded-full bg-black text-[var(--color-accent)]`} />}
+                {image.status === 'done' && <CheckCircleIcon className="absolute right-0 top-0 z-20 h-3 w-3 rounded-full bg-black text-[var(--color-accent)]" />}
 
                 <button
                     onClick={(e) => { e.stopPropagation(); onRemove(image.id); }}
                     className="absolute bottom-1 right-1 z-30 rounded-md border border-red-500/30 bg-red-950/80 p-0.5 text-red-400 opacity-0 transition-all hover:bg-red-500 hover:text-white group-hover:opacity-100"
                     aria-label={`Remove image ${index + 1}`}
                 >
-                    <CloseIcon className={isCompact ? 'h-3 w-3' : 'h-2.5 w-2.5'} />
+                    <CloseIcon className="h-2.5 w-2.5" />
                 </button>
             </div>
         );
     };
 
     return (
-        <>
-            {images.length > 1 && (
-                <div className="absolute bottom-[60px] left-0 right-0 z-40 hidden w-full border-t border-[var(--color-border)] bg-[var(--color-header)]/95 backdrop-blur-xl lg:block">
-                    <div className="flex gap-3 overflow-x-auto px-6 py-3 shadow-2xl custom-scrollbar">
-                        {images.map((image, index) => renderThumb(image, index, 'desktop'))}
+        images.length > 1 ? (
+            <div className="absolute bottom-[64px] left-0 right-0 z-40 w-full border-t border-[var(--color-border)] bg-[var(--color-header)]/95 backdrop-blur-xl">
+                <div className="flex items-center gap-4 px-5 py-3 shadow-2xl">
+                    <div className="shrink-0">
+                        <p className="text-[10px] font-extrabold uppercase text-[var(--color-text-muted)]">Photo queue</p>
+                        <p className="mt-1 text-xs font-semibold text-white">{images.length} images</p>
+                    </div>
+                    <div className="flex min-w-0 flex-1 gap-3 overflow-x-auto py-0.5 custom-scrollbar">
+                        {images.map((image, index) => renderThumb(image, index))}
                     </div>
                 </div>
-            )}
-
-            <div className="mobile-image-tray shrink-0 border-t border-[var(--color-border)] bg-black/92 px-3 py-3 backdrop-blur-xl lg:hidden">
-                <div className="flex items-center gap-3 overflow-x-auto no-scrollbar">
-                    {images.map((image, index) => renderThumb(image, index, 'compact'))}
-                </div>
             </div>
-        </>
+        ) : null
     );
 };
 
@@ -191,11 +188,7 @@ interface MainPanelProps {
   referenceDominantColor?: string | null;
   selectedImageIds: Set<string>;
   onToggleImageSelection: (id: string) => void;
-  onGenerate: () => void;
-  onCancelGeneration: () => void;
-  isActionable: boolean;
-  isProcessing: boolean;
-  generateButtonText: string;
+  finishPreviewStyle?: React.CSSProperties;
 }
 
 export const MainPanel: React.FC<MainPanelProps> = ({
@@ -211,11 +204,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({
   referenceDominantColor,
   selectedImageIds,
   onToggleImageSelection,
-  onGenerate,
-  onCancelGeneration,
-  isActionable,
-  isProcessing,
-  generateButtonText,
+  finishPreviewStyle,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [viewMode, setViewMode] = useState<'single' | 'side-by-side'>('side-by-side');
@@ -430,6 +419,9 @@ export const MainPanel: React.FC<MainPanelProps> = ({
     boxShadow: `0 0 50px 10px ${activeTarget.dominantColor.replace('rgb', 'rgba').replace(')', ', 0.3)')}`,
   } : {};
   const activeTargetSrc = getImageSrc(activeTarget?.target);
+  const isFinishingGenerated = Boolean(activeTarget?.generated);
+  const targetFinishPreviewStyle = !isFinishingGenerated ? finishPreviewStyle : undefined;
+  const generatedFinishPreviewStyle = isFinishingGenerated ? finishPreviewStyle : undefined;
   
   const steps = [
     { id: 'analyzing_target', title: 'Reading target photo' },
@@ -467,9 +459,9 @@ export const MainPanel: React.FC<MainPanelProps> = ({
           multiple
         />
         <div className="relative min-h-0 w-full flex-1 bg-[var(--color-viewport)]">
-          <div className="hidden absolute top-4 left-4 z-20 w-28 h-28 lg:block">
+          <div className="absolute left-5 top-5 z-20 h-28 w-28">
               <ImageUploader
-                  id="reference-image-mobile"
+                  id="reference-image-quick"
                   title="Reference"
                   subtitle=""
                   image={referenceImage}
@@ -494,7 +486,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({
             </div>
           ) : (
             <div className={`w-full h-full transition-[filter,transform] duration-500 ${activeTarget.status === 'processing' ? 'filter blur-2xl brightness-50 scale-105' : ''}`}>
-              <div className={`w-full h-full ${viewMode === 'single' ? 'p-2 sm:p-4 lg:p-8' : 'hidden'}`}>
+              <div className={`h-full w-full ${viewMode === 'single' ? 'p-6' : 'hidden'}`}>
                 <TransformWrapper ref={singleViewRef} initialScale={1} centerOnInit={true} onTransformed={(ref, state) => handleTransform(ref, state)}>
                   <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
                     {activeImage === 'generated' && !activeTarget.generated ? (
@@ -508,24 +500,27 @@ export const MainPanel: React.FC<MainPanelProps> = ({
                           className={`max-w-full max-h-full object-contain block rounded shadow-2xl transition-[opacity,filter,transform] duration-700 ${
                               activeImage === 'generated' && animateIn ? 'frosted-fade-in' : ''
                           }`}
-                          style={activeImage === 'target' ? glowStyle : {}}
+                          style={{
+                            ...(activeImage === 'target' ? glowStyle : {}),
+                            ...(activeImage === 'target' ? targetFinishPreviewStyle : generatedFinishPreviewStyle),
+                          }}
                       />
                     )}
                   </TransformComponent>
                 </TransformWrapper>
               </div>
 
-              <div className={`h-full w-full bg-[var(--color-viewport)] md:overflow-x-auto ${viewMode === 'side-by-side' ? 'block' : 'hidden'}`}>
-                <div className="grid h-full min-w-0 grid-cols-2 gap-1.5 p-2 md:min-w-[720px] md:gap-3 md:p-3 lg:min-w-0 lg:gap-4 lg:p-8">
-                <div className="group relative min-h-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl sm:rounded-2xl">
+              <div className={`h-full w-full bg-[var(--color-viewport)] ${viewMode === 'side-by-side' ? 'block' : 'hidden'}`}>
+                <div className="grid h-full min-w-0 grid-cols-2 gap-4 p-6">
+                <div className="group relative min-h-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl">
                   <TransformWrapper ref={originalSideRef} initialScale={1} centerOnInit={true} onTransformed={handleOriginalTransform}>
                     <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
-                      {activeTargetSrc && <img src={activeTargetSrc} alt="Original" className="max-w-full max-h-full object-contain block" />}
+                      {activeTargetSrc && <img src={activeTargetSrc} alt="Original" className="max-w-full max-h-full object-contain block transition-[filter] duration-150" style={targetFinishPreviewStyle} />}
                     </TransformComponent>
                   </TransformWrapper>
-                  <div className="pointer-events-none absolute left-2 top-2 rounded-md border border-white/10 bg-black/70 px-2 py-1 text-[10px] font-semibold text-white/75 sm:left-4 sm:top-4 sm:px-2.5 sm:text-xs">Target</div>
+                  <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-white/10 bg-black/70 px-2.5 py-1 text-xs font-semibold text-white/75">Target</div>
                 </div>
-                <div className="group relative min-h-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl sm:rounded-2xl">
+                <div className="group relative min-h-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl">
                   <TransformWrapper ref={styledSideRef} initialScale={1} centerOnInit={true} onTransformed={handleStyledTransform}>
                     <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
                       {activeTarget.generated ? (
@@ -535,13 +530,14 @@ export const MainPanel: React.FC<MainPanelProps> = ({
                           className={`max-w-full max-h-full object-contain block ${
                                 animateIn ? 'frosted-fade-in' : ''
                           }`} 
+                          style={generatedFinishPreviewStyle}
                         />
                       ) : (
                         <GenerationPlaceholder />
                       )}
                     </TransformComponent>
                   </TransformWrapper>
-                  <div className="pointer-events-none absolute left-2 top-2 rounded-md border border-white/10 bg-[var(--color-accent)] px-2 py-1 text-[10px] font-semibold text-black shadow-[0_0_15px_rgba(var(--color-accent-rgb),0.24)] sm:left-4 sm:top-4 sm:px-2.5 sm:text-xs">
+                  <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-white/10 bg-[var(--color-accent)] px-2.5 py-1 text-xs font-semibold text-black shadow-[0_0_15px_rgba(var(--color-accent-rgb),0.24)]">
                     Result
                   </div>
                 </div>
@@ -591,8 +587,8 @@ export const MainPanel: React.FC<MainPanelProps> = ({
         />
 
         {activeTarget && (
-          <div className="mobile-editor-dock no-scrollbar relative z-40 flex shrink-0 flex-col justify-between gap-2 overflow-hidden border-t border-[var(--color-border)] bg-[var(--color-header)] px-2 py-2 text-[var(--color-text-muted)] backdrop-blur-xl sm:px-5 lg:min-h-[60px] lg:flex-row lg:items-center lg:overflow-x-auto">
-            <div className="flex w-full shrink-0 items-center gap-2 overflow-x-auto no-scrollbar py-1 lg:w-auto">
+          <div className="desktop-editor-toolbar relative z-40 flex min-h-[64px] shrink-0 items-center justify-between gap-4 overflow-hidden border-t border-[var(--color-border)] bg-[var(--color-header)] px-5 text-[var(--color-text-muted)] backdrop-blur-xl">
+            <div className="flex shrink-0 items-center gap-2">
                 <button
                     onClick={() => inputRef.current?.click()}
                     className="btn-secondary flex h-10 items-center gap-2 px-3 py-2 text-xs"
@@ -616,41 +612,10 @@ export const MainPanel: React.FC<MainPanelProps> = ({
                     Result
                   </button>
                 </div>
-                <Tooltip text="Export current image or finished batch.">
-                  <button
-                    onClick={() => setIsDownloadModalOpen(true)}
-                    disabled={!activeTarget?.generated && allTargets.filter(t => t.status === 'done').length === 0}
-                    className="btn-secondary ml-auto flex h-10 shrink-0 items-center gap-2 px-3 py-2 text-xs disabled:opacity-30 lg:hidden"
-                  >
-                    <DownloadIcon className="w-3.5 h-3.5" />
-                    <span>Export</span>
-                  </button>
-                </Tooltip>
             </div>
 
-            <div className="mobile-generate-row flex w-full shrink-0 justify-center lg:hidden">
-              {isProcessing ? (
-                <button
-                  onClick={onCancelGeneration}
-                  className="flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-red-400/25 bg-red-500/15 px-4 text-xs font-extrabold text-red-100 shadow-[0_12px_34px_rgba(0,0,0,0.32)]"
-                >
-                  <XCircleIcon className="h-3.5 w-3.5" />
-                  <span>Cancel</span>
-                </button>
-              ) : (
-                <button
-                  onClick={onGenerate}
-                  disabled={!isActionable}
-                  className="primary-cta flex h-10 w-full items-center justify-center gap-2 px-4 text-xs font-extrabold shadow-[0_16px_38px_rgba(var(--color-accent-rgb),0.18)] disabled:cursor-not-allowed disabled:opacity-35"
-                >
-                  <SparklesIcon className="h-3.5 w-3.5" />
-                  <span className="truncate">{generateButtonText}</span>
-                </button>
-              )}
-            </div>
-
-            <div className="hidden shrink-0 items-center gap-2 py-1 lg:flex">
-              <span className="hidden text-xs font-medium text-[var(--color-text-muted)] sm:inline">Zoom {Math.round(zoomLevel * 100)}%</span>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="text-xs font-medium text-[var(--color-text-muted)]">Zoom {Math.round(zoomLevel * 100)}%</span>
               <div className="flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1">
                   <button onClick={handleZoomOut} className="rounded-md p-2 transition-colors hover:bg-[var(--color-surface-hover)] hover:text-white" aria-label="Zoom out"><ZoomOutIcon className="w-3.5 h-3.5" /></button>
                   <button onClick={handleZoomIn} className="rounded-md p-2 transition-colors hover:bg-[var(--color-surface-hover)] hover:text-white" aria-label="Zoom in"><ZoomInIcon className="w-3.5 h-3.5" /></button>
@@ -661,7 +626,7 @@ export const MainPanel: React.FC<MainPanelProps> = ({
               </div>
             </div>
 
-            <div className="hidden shrink-0 items-center gap-2 py-1 lg:flex">
+            <div className="flex shrink-0 items-center gap-2">
               <Tooltip text="Reset view">
                   <button onClick={handleResetTransform} className="btn-secondary flex h-9 w-9 items-center justify-center p-0" aria-label="Reset view">
                     <ResetIcon className="w-3.5 h-3.5" />

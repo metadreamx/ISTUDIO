@@ -2,16 +2,22 @@ import express, { type ErrorRequestHandler } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
-import { existsSync } from 'fs';
+import { createReadStream, existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import chokidar, { type FSWatcher } from 'chokidar';
+import sharp from 'sharp';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECTS_DIR = path.resolve(process.env.ISTUDIO_PROJECTS_DIR || path.join(process.cwd(), 'projects'));
 const PROJECT_JSON = 'project.json';
 const PROJECT_PAYLOAD_LIMIT = process.env.ISTUDIO_PROJECT_PAYLOAD_LIMIT || '128mb';
+const APP_DIR = path.resolve(process.cwd());
+const PRO_AI_RUNTIME_DIR = path.join(APP_DIR, 'runtime', 'pro-ai');
+const PRO_AI_MODELS_DIR = path.join(APP_DIR, 'models', 'pro-ai');
+const PRO_AI_MANIFEST = path.join(PRO_AI_MODELS_DIR, 'manifest.json');
+const PRO_AI_SETUP_TEMP = path.join(APP_DIR, '.istudio-pro-ai-temp');
 const PROJECT_SCAN_MAX_DEPTH = 6;
 const PROJECT_SCAN_IGNORED_DIRS = new Set([
   '.git',
@@ -86,6 +92,10 @@ type ImageAssetPayload = {
   mimeType?: string | null;
   width?: number | null;
   height?: number | null;
+  matchFrame?: {
+    width?: number | null;
+    height?: number | null;
+  };
 };
 
 type ImportableImageFile = {
@@ -133,6 +143,58 @@ type GeminiRelayPayload = {
   config?: unknown;
   requestType?: 'analysis' | 'image-edit' | 'diagnostic';
 };
+
+type ProToolStatus = {
+  available: boolean;
+  installed: boolean;
+  runtimeReady: boolean;
+  acceleration: 'directml' | 'webgpu' | 'cpu' | 'unavailable';
+  message: string;
+  models: {
+    id: string;
+    task: string;
+    installed: boolean;
+    path?: string;
+    inputSize?: number;
+  }[];
+};
+
+type ProAiManifestModel = {
+  id: string;
+  task: 'segmentation' | 'matting' | 'upscale' | 'face-restore';
+  file: string;
+  inputSize?: number;
+  channels?: 'rgb';
+};
+
+type ProAiManifest = {
+  version?: number;
+  models?: ProAiManifestModel[];
+};
+
+type ProToolImagePayload = {
+  projectId: string;
+  image?: StoredImageState;
+  source?: 'target' | 'generated';
+  settings?: Record<string, unknown>;
+};
+
+type ColorGradeRenderPayload = {
+  projectId: string;
+  target?: StoredImageState;
+  reference?: StoredImageState;
+  recipe?: {
+    version?: string;
+    size?: number;
+    data?: number[];
+    settings?: Record<string, unknown>;
+    diagnostics?: unknown;
+  };
+  format?: 'png' | 'jpeg' | 'webp';
+  fileName?: string;
+};
+
+type ProToolQueueTask<T> = () => Promise<T>;
 
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const GEMINI_RELAY_HEADER = 'x-istudio-gemini-key';
@@ -314,6 +376,11 @@ const ALLOWED_ASSET_BUCKETS = new Set([
   'virtual-set/renders',
   'virtual-set/thumbnails',
   'virtual-set/scenes',
+  'pro-tools/culling',
+  'pro-tools/masks',
+  'pro-tools/cutouts',
+  'pro-tools/retouch',
+  'pro-tools/finished',
   'editor/assets',
   'editor/originals',
   'editor/layers',
@@ -447,6 +514,11 @@ async function ensureProjectAssetDirs(projectDir: string) {
     fs.mkdir(path.join(projectDir, 'outputs'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'assets'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'tether', 'inbox'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'pro-tools', 'culling'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'pro-tools', 'masks'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'pro-tools', 'cutouts'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'pro-tools', 'retouch'), { recursive: true }),
+    fs.mkdir(path.join(projectDir, 'pro-tools', 'finished'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'editor', 'originals'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'editor', 'layers'), { recursive: true }),
     fs.mkdir(path.join(projectDir, 'editor', 'exports'), { recursive: true }),
@@ -625,6 +697,7 @@ async function readProjectSummaryFromDirectory(projectDir: string): Promise<(Sto
   const state = isRecord(project.state) ? project.state : {};
   const history = getArrayAtPath(state, ['generationHistory']);
   const targetImages = getArrayAtPath(state, ['targetImages']);
+  const colorGradeOutputs = getArrayAtPath(state, ['colorGrade', 'outputs']);
   const virtualSetScenes = getArrayAtPath(state, ['virtualSet', 'scenes']);
   const generatedImages = Array.isArray(project.generatedImages) ? project.generatedImages : [];
 
@@ -637,7 +710,7 @@ async function readProjectSummaryFromDirectory(projectDir: string): Promise<(Sto
     state: {},
     summary: {
       isSummary: true,
-      outputCount: Math.max(history.length, generatedImages.length, targetImages.length),
+      outputCount: Math.max(history.length, generatedImages.length, targetImages.length, colorGradeOutputs.length),
       virtualSetSceneCount: virtualSetScenes.length,
     },
   };
@@ -764,20 +837,51 @@ async function writeImageAsset(projectId: string, payload: ImageAssetPayload): P
   const bucket = safeAssetBucket(payload.bucket);
   const baseName = payload.fileName || image?.fileName || `image-${Date.now()}`;
   const targetDir = path.join(projectDir, bucket);
-  const targetPath = path.join(targetDir, assetFileName(baseName, parsed.mimeType, parsed.base64));
+  const requestedFrameWidth = Math.max(1, Math.round(Number(payload.matchFrame?.width || 0)));
+  const requestedFrameHeight = Math.max(1, Math.round(Number(payload.matchFrame?.height || 0)));
+  const shouldMatchFrame = requestedFrameWidth > 1 && requestedFrameHeight > 1;
+  let outputMimeType = parsed.mimeType;
+  let outputBuffer = Buffer.from(parsed.base64, 'base64');
+  let outputWidth = payload.width ?? image?.width ?? null;
+  let outputHeight = payload.height ?? image?.height ?? null;
+
+  if (shouldMatchFrame) {
+    const normalized = sharp(outputBuffer)
+      .rotate()
+      .resize(requestedFrameWidth, requestedFrameHeight, {
+        fit: 'fill',
+        kernel: sharp.kernel.lanczos3,
+      })
+      .withMetadata({ orientation: 1 });
+    if (parsed.mimeType === 'image/jpeg') {
+      outputBuffer = await normalized.jpeg({ quality: 98, chromaSubsampling: '4:4:4', mozjpeg: true }).toBuffer();
+      outputMimeType = 'image/jpeg';
+    } else if (parsed.mimeType === 'image/webp') {
+      outputBuffer = await normalized.webp({ quality: 98, smartSubsample: true }).toBuffer();
+      outputMimeType = 'image/webp';
+    } else {
+      outputBuffer = await normalized.png({ compressionLevel: 6, adaptiveFiltering: true }).toBuffer();
+      outputMimeType = 'image/png';
+    }
+    outputWidth = requestedFrameWidth;
+    outputHeight = requestedFrameHeight;
+  }
+
+  const outputBase64 = outputBuffer.toString('base64');
+  const targetPath = path.join(targetDir, assetFileName(baseName, outputMimeType, outputBase64));
 
   await fs.mkdir(targetDir, { recursive: true });
   if (!existsSync(targetPath)) {
-    await fs.writeFile(targetPath, Buffer.from(parsed.base64, 'base64'));
+    await fs.writeFile(targetPath, outputBuffer);
   }
 
   const portablePath = relativeAssetPath(projectDir, targetPath);
   return {
     fileName: baseName,
     base64: null,
-    mimeType: parsed.mimeType,
-    width: payload.width ?? image?.width ?? null,
-    height: payload.height ?? image?.height ?? null,
+    mimeType: outputMimeType,
+    width: outputWidth,
+    height: outputHeight,
     assetPath: portablePath,
     assetUrl: assetUrlForProject(projectId, portablePath),
   };
@@ -935,6 +1039,649 @@ async function useVirtualSetRenderAsReference(projectId: string, image: StoredIm
   };
   await writeProject(updatedProject);
   return readProjectFromDirectory(projectDir);
+}
+
+let proToolQueue: Promise<unknown> = Promise.resolve();
+let cachedOrt: unknown | null = null;
+
+function enqueueProTool<T>(task: ProToolQueueTask<T>): Promise<T> {
+  const next = proToolQueue.then(task, task);
+  proToolQueue = next.catch(() => undefined);
+  return next;
+}
+
+async function readProAiManifest(): Promise<ProAiManifest> {
+  try {
+    const raw = await fs.readFile(PRO_AI_MANIFEST, 'utf8');
+    return JSON.parse(raw) as ProAiManifest;
+  } catch {
+    return { version: 1, models: [] };
+  }
+}
+
+async function getOrtRuntime(): Promise<any | null> {
+  if (cachedOrt) return cachedOrt;
+  try {
+    cachedOrt = await import('onnxruntime-node');
+    return cachedOrt;
+  } catch (error) {
+    console.warn('ONNX Runtime is unavailable.', error);
+    return null;
+  }
+}
+
+async function getProToolStatus(): Promise<ProToolStatus> {
+  const manifest = await readProAiManifest();
+  const ort = await getOrtRuntime();
+  const models = await Promise.all((manifest.models || []).map(async (model) => {
+    const modelPath = path.join(PRO_AI_MODELS_DIR, model.file);
+    return {
+      id: model.id,
+      task: model.task,
+      installed: existsSync(modelPath),
+      path: existsSync(modelPath) ? path.relative(APP_DIR, modelPath).replace(/\\/g, '/') : undefined,
+      inputSize: model.inputSize,
+    };
+  }));
+  const installed = models.some((model) => model.installed) || existsSync(PRO_AI_RUNTIME_DIR) || existsSync(PRO_AI_MODELS_DIR);
+  return {
+    available: Boolean(ort),
+    installed,
+    runtimeReady: Boolean(ort),
+    acceleration: Boolean(ort) ? 'directml' : 'unavailable',
+    message: !ort
+      ? 'Local Pro AI runtime is not available in this install.'
+      : installed
+        ? 'Local Pro AI tools are ready. GPU acceleration is used when Windows exposes DirectML; CPU fallback is automatic.'
+        : 'Local Pro AI Pack is not installed yet.',
+    models,
+  };
+}
+
+async function resolveImagePayload(projectId: string, image?: StoredImageState): Promise<{ projectDir: string; buffer: Buffer; fileName: string; mimeType: string; width: number | null; height: number | null }> {
+  const projectDir = await findProjectDir(projectId);
+  if (!projectDir) throw new Error('Project not found.');
+  if (!image) throw new Error('Choose an image before using Pro Tools.');
+
+  if (image.assetPath) {
+    const assetPath = await resolvePortableProjectAsset(projectDir, image.assetPath);
+    if (!assetPath) throw new Error('The selected project image could not be found.');
+    const buffer = await fs.readFile(assetPath);
+    const metadata = await sharp(buffer).metadata();
+    return {
+      projectDir,
+      buffer,
+      fileName: image.fileName || path.basename(assetPath),
+      mimeType: image.mimeType || mimeTypeForExtension(assetPath),
+      width: metadata.width || image.width || null,
+      height: metadata.height || image.height || null,
+    };
+  }
+
+  if (image.assetUrl?.startsWith(`/api/projects/${encodeURIComponent(projectId)}/assets/`)) {
+    const encodedPath = image.assetUrl.split(`/api/projects/${encodeURIComponent(projectId)}/assets/`)[1] || '';
+    const requestedPath = decodeURIComponent(encodedPath).replace(/\\/g, '/');
+    const assetPath = await resolvePortableProjectAsset(projectDir, requestedPath);
+    if (!assetPath) throw new Error('The selected generated image could not be found.');
+    const buffer = await fs.readFile(assetPath);
+    const metadata = await sharp(buffer).metadata();
+    return {
+      projectDir,
+      buffer,
+      fileName: image.fileName || path.basename(assetPath),
+      mimeType: image.mimeType || mimeTypeForExtension(assetPath),
+      width: metadata.width || image.width || null,
+      height: metadata.height || image.height || null,
+    };
+  }
+
+  if (image.base64 && image.mimeType) {
+    const buffer = Buffer.from(image.base64, 'base64');
+    const metadata = await sharp(buffer).metadata();
+    return {
+      projectDir,
+      buffer,
+      fileName: image.fileName || `pro-image-${Date.now()}.${extensionForMime(image.mimeType)}`,
+      mimeType: image.mimeType,
+      width: metadata.width || image.width || null,
+      height: metadata.height || image.height || null,
+    };
+  }
+
+  throw new Error('The selected image is not available to Pro Tools.');
+}
+
+async function writeProToolBuffer(projectId: string, projectDir: string, bucket: string, buffer: Buffer, fileName: string, mimeType: string, width?: number | null, height?: number | null): Promise<StoredImageState> {
+  const safeBucket = safeAssetBucket(bucket);
+  const base64Hash = createHash('sha1').update(buffer).digest('hex').slice(0, 12);
+  const extension = extensionForMime(mimeType);
+  const targetDir = path.join(projectDir, safeBucket);
+  const targetPath = path.join(targetDir, `${safeFilePart(fileName.replace(/\.[^/.]+$/, ''))}-${base64Hash}.${extension}`);
+  await fs.mkdir(targetDir, { recursive: true });
+  if (!existsSync(targetPath)) {
+    await fs.writeFile(targetPath, buffer);
+  }
+  const portablePath = relativeAssetPath(projectDir, targetPath);
+  return {
+    fileName: path.basename(targetPath),
+    base64: null,
+    mimeType,
+    width: width ?? null,
+    height: height ?? null,
+    assetPath: portablePath,
+    assetUrl: assetUrlForProject(projectId, portablePath),
+  };
+}
+
+function sampleColorGradeLut(
+  red: number,
+  green: number,
+  blue: number,
+  size: number,
+  values: number[],
+): [number, number, number] {
+  const scaledRed = Math.max(0, Math.min(size - 1, red / 255 * (size - 1)));
+  const scaledGreen = Math.max(0, Math.min(size - 1, green / 255 * (size - 1)));
+  const scaledBlue = Math.max(0, Math.min(size - 1, blue / 255 * (size - 1)));
+  const red0 = Math.floor(scaledRed);
+  const green0 = Math.floor(scaledGreen);
+  const blue0 = Math.floor(scaledBlue);
+  const red1 = Math.min(size - 1, red0 + 1);
+  const green1 = Math.min(size - 1, green0 + 1);
+  const blue1 = Math.min(size - 1, blue0 + 1);
+  const redMix = scaledRed - red0;
+  const greenMix = scaledGreen - green0;
+  const blueMix = scaledBlue - blue0;
+  const read = (r: number, g: number, b: number, channel: number) => (
+    values[((b * size + g) * size + r) * 3 + channel] || 0
+  );
+  const output: [number, number, number] = [0, 0, 0];
+  for (let channel = 0; channel < 3; channel += 1) {
+    const c000 = read(red0, green0, blue0, channel);
+    const c100 = read(red1, green0, blue0, channel);
+    const c010 = read(red0, green1, blue0, channel);
+    const c110 = read(red1, green1, blue0, channel);
+    const c001 = read(red0, green0, blue1, channel);
+    const c101 = read(red1, green0, blue1, channel);
+    const c011 = read(red0, green1, blue1, channel);
+    const c111 = read(red1, green1, blue1, channel);
+    const c00 = c000 + (c100 - c000) * redMix;
+    const c10 = c010 + (c110 - c010) * redMix;
+    const c01 = c001 + (c101 - c001) * redMix;
+    const c11 = c011 + (c111 - c011) * redMix;
+    const c0 = c00 + (c10 - c00) * greenMix;
+    const c1 = c01 + (c11 - c01) * greenMix;
+    output[channel] = c0 + (c1 - c0) * blueMix;
+  }
+  return output;
+}
+
+async function analyzeColorGradeImage(projectId: string, image?: StoredImageState) {
+  const imageData = await resolveImagePayload(projectId, image);
+  const { data, info } = await sharp(imageData.buffer)
+    .rotate()
+    .resize({ width: 640, height: 640, fit: 'inside', withoutEnlargement: true })
+    .removeAlpha()
+    .toColourspace('srgb')
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const histogram = Array.from({ length: 256 }, () => 0);
+  const channelMeans = [0, 0, 0];
+  let clippedShadows = 0;
+  let clippedHighlights = 0;
+  let contrast = 0;
+  let count = 0;
+  for (let index = 0; index < data.length; index += info.channels) {
+    const red = data[index];
+    const green = data[index + 1];
+    const blue = data[index + 2];
+    const luminance = Math.max(0, Math.min(255, Math.round(0.2126 * red + 0.7152 * green + 0.0722 * blue)));
+    histogram[luminance] += 1;
+    channelMeans[0] += red;
+    channelMeans[1] += green;
+    channelMeans[2] += blue;
+    if (luminance < 4) clippedShadows += 1;
+    if (luminance > 251) clippedHighlights += 1;
+    if (index >= info.channels) {
+      const prior = Math.round(0.2126 * data[index - info.channels] + 0.7152 * data[index - info.channels + 1] + 0.0722 * data[index - info.channels + 2]);
+      contrast += Math.abs(luminance - prior);
+    }
+    count += 1;
+  }
+  return {
+    width: imageData.width,
+    height: imageData.height,
+    histogram,
+    meanRgb: channelMeans.map((value) => value / Math.max(1, count)),
+    localContrast: contrast / Math.max(1, count) / 255,
+    clippedShadows: clippedShadows / Math.max(1, count),
+    clippedHighlights: clippedHighlights / Math.max(1, count),
+  };
+}
+
+async function renderColorGradeImage(payload: ColorGradeRenderPayload) {
+  const imageData = await resolveImagePayload(payload.projectId, payload.target);
+  const size = Math.max(2, Math.min(33, Number(payload.recipe?.size || 0)));
+  const lut = Array.isArray(payload.recipe?.data) ? payload.recipe!.data! : [];
+  if (lut.length !== size * size * size * 3) {
+    throw new Error('The Master Match render recipe is incomplete. Run Master Match again.');
+  }
+  const metadata = await sharp(imageData.buffer).metadata();
+  if (!metadata.width || !metadata.height) {
+    throw new Error('ISTUDIO could not read the target image dimensions.');
+  }
+  const swapsDimensions = metadata.orientation !== undefined
+    && metadata.orientation >= 5
+    && metadata.orientation <= 8;
+  const width = swapsDimensions ? metadata.height : metadata.width;
+  const height = swapsDimensions ? metadata.width : metadata.height;
+  const settings = payload.recipe?.settings || {};
+  const vignette = Math.max(-100, Math.min(100, Number(settings.vignette || 0))) / 100;
+  const grain = Math.max(0, Math.min(100, Number(settings.grain || 0))) / 100;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const maximumDistance = Math.max(1, Math.hypot(centerX, centerY));
+  const format = payload.format || 'png';
+  const clarity = Math.max(-100, Math.min(100, Number(settings.clarity || 0)));
+  const sharpness = Math.max(-100, Math.min(100, Number(settings.sharpness || 0)));
+  const renderTempDir = path.join(imageData.projectDir, '.color-grade-temp');
+  const rawPath = path.join(renderTempDir, `${safeFilePart(imageData.fileName)}-${Date.now()}.rgba`);
+  await fs.mkdir(renderTempDir, { recursive: true });
+  const rawHandle = await fs.open(rawPath, 'w');
+  const tileHeight = 384;
+  let output: Buffer;
+  let mimeType: string;
+  try {
+    for (let top = 0; top < height; top += tileHeight) {
+      const currentHeight = Math.min(tileHeight, height - top);
+      const decoded = await sharp(imageData.buffer)
+        .rotate()
+        .ensureAlpha()
+        .toColourspace('srgb')
+        .extract({ left: 0, top, width, height: currentHeight })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const { data, info } = decoded;
+      for (let index = 0; index < data.length; index += info.channels) {
+        const pixel = index / info.channels;
+        const x = pixel % width;
+        const y = top + Math.floor(pixel / width);
+        const mapped = sampleColorGradeLut(data[index], data[index + 1], data[index + 2], size, lut);
+        let multiplier = 1;
+        if (vignette !== 0) {
+          const distance = Math.min(1, Math.hypot(x - centerX, y - centerY) / maximumDistance);
+          multiplier *= Math.max(0.55, Math.min(1.45, 1 - vignette * Math.pow(distance, 1.8) * 0.48));
+        }
+        const noise = grain > 0
+          ? ((((x * 12.9898 + y * 78.233) * 43758.5453) % 1 + 1) % 1 - 0.5) * grain * 9
+          : 0;
+        data[index] = Math.max(0, Math.min(255, Math.round(mapped[0] * 255 * multiplier + noise)));
+        data[index + 1] = Math.max(0, Math.min(255, Math.round(mapped[1] * 255 * multiplier + noise)));
+        data[index + 2] = Math.max(0, Math.min(255, Math.round(mapped[2] * 255 * multiplier + noise)));
+      }
+      await rawHandle.write(data);
+    }
+    await rawHandle.close();
+
+    let pipeline = sharp({
+      raw: { width, height, channels: 4 },
+    });
+    if (clarity > 0) {
+      pipeline = pipeline.sharpen({ sigma: 1.25, m1: 0.55, m2: 1 + clarity / 80 });
+    } else if (clarity < 0) {
+      pipeline = pipeline.blur(Math.max(0.3, Math.min(1.2, Math.abs(clarity) / 90)));
+    }
+    if (sharpness > 0) {
+      pipeline = pipeline.sharpen({ sigma: 0.65 + sharpness / 90, m1: 0.8, m2: 1.5 });
+    }
+    pipeline = pipeline.withMetadata({
+      orientation: 1,
+      density: metadata.density,
+    });
+    if (format === 'jpeg') {
+      pipeline = pipeline.removeAlpha().jpeg({ quality: 96, chromaSubsampling: '4:4:4', mozjpeg: true });
+      mimeType = 'image/jpeg';
+    } else if (format === 'webp') {
+      pipeline = pipeline.webp({ quality: 96, smartSubsample: true });
+      mimeType = 'image/webp';
+    } else {
+      pipeline = pipeline.png({ compressionLevel: 6, adaptiveFiltering: true });
+      mimeType = 'image/png';
+    }
+    const outputPromise = pipeline.toBuffer();
+    createReadStream(rawPath).pipe(pipeline);
+    output = await outputPromise;
+  } finally {
+    await rawHandle.close().catch(() => undefined);
+    await fs.rm(rawPath, { force: true }).catch(() => undefined);
+    await fs.rmdir(renderTempDir).catch(() => undefined);
+  }
+  const fileName = payload.fileName || `${imageData.fileName.replace(/\.[^/.]+$/, '')}-master-match`;
+  const image = await writeProToolBuffer(
+    payload.projectId,
+    imageData.projectDir,
+    'outputs',
+    output,
+    fileName,
+    mimeType,
+    width,
+    height,
+  );
+  return {
+    image,
+    diagnostics: payload.recipe?.diagnostics || null,
+    engineVersion: payload.recipe?.version || 'unknown',
+    width,
+    height,
+  };
+}
+
+async function analyzeLocalImage(payload: ProToolImagePayload) {
+  return enqueueProTool(async () => {
+    const imageData = await resolveImagePayload(payload.projectId, payload.image);
+    const pipeline = sharp(imageData.buffer).rotate().resize({ width: 640, height: 640, fit: 'inside', withoutEnlargement: true }).removeAlpha().greyscale();
+    const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
+    const totalPixels = Math.max(1, info.width * info.height);
+
+    let sum = 0;
+    let sumSq = 0;
+    let clippedDark = 0;
+    let clippedBright = 0;
+    for (const value of data) {
+      sum += value;
+      sumSq += value * value;
+      if (value < 8) clippedDark += 1;
+      if (value > 247) clippedBright += 1;
+    }
+    const mean = sum / totalPixels;
+    const variance = Math.max(0, sumSq / totalPixels - mean * mean);
+
+    let laplacian = 0;
+    let samples = 0;
+    const width = info.width;
+    const height = info.height;
+    for (let y = 1; y < height - 1; y += 1) {
+      for (let x = 1; x < width - 1; x += 1) {
+        const index = y * width + x;
+        const value = (data[index] * 4) - data[index - 1] - data[index + 1] - data[index - width] - data[index + width];
+        laplacian += value * value;
+        samples += 1;
+      }
+    }
+
+    const sharpnessScore = Math.min(100, Math.round(Math.sqrt(laplacian / Math.max(1, samples)) * 2.2));
+    const exposureBalance = 100 - Math.min(100, Math.abs(mean - 128) * 0.9 + ((clippedDark + clippedBright) / totalPixels) * 120);
+    const contrastScore = Math.min(100, Math.round(Math.sqrt(variance) * 2.3));
+    const cullScore = Math.max(0, Math.min(100, Math.round((sharpnessScore * 0.46) + (exposureBalance * 0.34) + (contrastScore * 0.2))));
+    const flags: string[] = [];
+    if (sharpnessScore < 38) flags.push('Soft focus');
+    if (mean < 58) flags.push('Underexposed');
+    if (mean > 205) flags.push('Overexposed');
+    if ((clippedBright / totalPixels) > 0.08) flags.push('Blown highlights');
+    if ((clippedDark / totalPixels) > 0.12) flags.push('Crushed shadows');
+    if (contrastScore < 26) flags.push('Flat contrast');
+
+    const result = {
+      score: cullScore,
+      pickStatus: cullScore >= 72 ? 'pick' : cullScore < 44 ? 'reject' : 'review',
+      rating: cullScore >= 86 ? 5 : cullScore >= 72 ? 4 : cullScore >= 58 ? 3 : cullScore >= 44 ? 2 : 1,
+      flags,
+      sharpnessScore,
+      exposureScore: Math.round(exposureBalance),
+      contrastScore,
+      faceCount: null,
+      eyeStatus: 'Model pack face checks pending',
+      analyzedAt: Date.now(),
+    };
+
+    const reportPath = path.join(imageData.projectDir, 'pro-tools', 'culling', `${safeFilePart(imageData.fileName)}-${Date.now()}.json`);
+    await fs.mkdir(path.dirname(reportPath), { recursive: true });
+    await fs.writeFile(reportPath, JSON.stringify(result, null, 2), 'utf8');
+    return result;
+  });
+}
+
+async function createFallbackAlphaMask(buffer: Buffer): Promise<{ mask: Buffer; width: number; height: number; sourcePng: Buffer }> {
+  const source = sharp(buffer).rotate().resize({ width: 4096, height: 4096, fit: 'inside', withoutEnlargement: true }).removeAlpha();
+  const metadata = await source.metadata();
+  const width = metadata.width || 1;
+  const height = metadata.height || 1;
+  const sourcePng = await source.png().toBuffer();
+  const { data } = await sharp(sourcePng).raw().toBuffer({ resolveWithObject: true });
+  const borderSamples: number[][] = [];
+  const sampleStep = Math.max(1, Math.floor(Math.min(width, height) / 80));
+  const pushPixel = (x: number, y: number) => {
+    const index = (y * width + x) * 3;
+    borderSamples.push([data[index], data[index + 1], data[index + 2]]);
+  };
+  for (let x = 0; x < width; x += sampleStep) {
+    pushPixel(x, 0);
+    pushPixel(x, height - 1);
+  }
+  for (let y = 0; y < height; y += sampleStep) {
+    pushPixel(0, y);
+    pushPixel(width - 1, y);
+  }
+  const background = borderSamples.reduce((acc, pixel) => {
+    acc[0] += pixel[0];
+    acc[1] += pixel[1];
+    acc[2] += pixel[2];
+    return acc;
+  }, [0, 0, 0]).map((value) => value / Math.max(1, borderSamples.length));
+
+  const alpha = Buffer.alloc(width * height);
+  for (let index = 0; index < width * height; index += 1) {
+    const rgbIndex = index * 3;
+    const distance = Math.sqrt(
+      ((data[rgbIndex] - background[0]) ** 2) +
+      ((data[rgbIndex + 1] - background[1]) ** 2) +
+      ((data[rgbIndex + 2] - background[2]) ** 2),
+    );
+    const normalized = Math.max(0, Math.min(255, (distance - 22) * 4.2));
+    alpha[index] = normalized;
+  }
+
+  const mask = await sharp(alpha, { raw: { width, height, channels: 1 } })
+    .median(3)
+    .blur(1.2)
+    .png()
+    .toBuffer();
+  return { mask, width, height, sourcePng };
+}
+
+async function runOnnxSegmentation(buffer: Buffer): Promise<{ mask: Buffer; width: number; height: number; sourcePng: Buffer; modelId: string } | null> {
+  const manifest = await readProAiManifest();
+  const model = (manifest.models || []).find((candidate) => {
+    const modelPath = path.join(PRO_AI_MODELS_DIR, candidate.file);
+    return candidate.task === 'segmentation' && existsSync(modelPath);
+  });
+  if (!model) return null;
+  const ort = await getOrtRuntime();
+  if (!ort) return null;
+
+  const inputSize = model.inputSize || 320;
+  const modelPath = path.join(PRO_AI_MODELS_DIR, model.file);
+  const source = sharp(buffer).rotate().resize({ width: 4096, height: 4096, fit: 'inside', withoutEnlargement: true }).removeAlpha();
+  const metadata = await source.metadata();
+  const width = metadata.width || 1;
+  const height = metadata.height || 1;
+  const sourcePng = await source.png().toBuffer();
+  const input = await sharp(sourcePng).resize(inputSize, inputSize, { fit: 'fill' }).raw().toBuffer();
+  const tensorData = new Float32Array(1 * 3 * inputSize * inputSize);
+  const pixels = inputSize * inputSize;
+  for (let i = 0; i < pixels; i += 1) {
+    tensorData[i] = input[i * 3] / 255;
+    tensorData[pixels + i] = input[i * 3 + 1] / 255;
+    tensorData[pixels * 2 + i] = input[i * 3 + 2] / 255;
+  }
+
+  let session;
+  try {
+    session = await ort.InferenceSession.create(modelPath, { executionProviders: ['dml', 'cpu'] });
+  } catch {
+    session = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
+  }
+
+  const inputName = session.inputNames[0];
+  const outputName = session.outputNames[0];
+  const feeds: Record<string, unknown> = {
+    [inputName]: new ort.Tensor('float32', tensorData, [1, 3, inputSize, inputSize]),
+  };
+  const output = await session.run(feeds);
+  const outputTensor = output[outputName];
+  const raw = Array.from(outputTensor.data as Float32Array | number[]);
+  const min = Math.min(...raw);
+  const max = Math.max(...raw);
+  const scale = max > min ? 255 / (max - min) : 1;
+  const alpha = Buffer.alloc(inputSize * inputSize);
+  for (let index = 0; index < inputSize * inputSize; index += 1) {
+    alpha[index] = Math.max(0, Math.min(255, Math.round((raw[index] - min) * scale)));
+  }
+  const mask = await sharp(alpha, { raw: { width: inputSize, height: inputSize, channels: 1 } })
+    .resize(width, height, { fit: 'fill' })
+    .median(3)
+    .blur(0.8)
+    .png()
+    .toBuffer();
+  return { mask, width, height, sourcePng, modelId: model.id };
+}
+
+async function removeLocalBackground(payload: ProToolImagePayload) {
+  return enqueueProTool(async () => {
+    const imageData = await resolveImagePayload(payload.projectId, payload.image);
+    const segmentation = await runOnnxSegmentation(imageData.buffer).catch((error) => {
+      console.warn('ONNX cutout failed; using fallback alpha mask.', error);
+      return null;
+    });
+    const cutoutData = segmentation || await createFallbackAlphaMask(imageData.buffer);
+    const cutoutBuffer = await sharp(cutoutData.sourcePng)
+      .removeAlpha()
+      .joinChannel(cutoutData.mask)
+      .png()
+      .toBuffer();
+    const maskImage = await writeProToolBuffer(payload.projectId, imageData.projectDir, 'pro-tools/masks', cutoutData.mask, `${imageData.fileName}-mask`, 'image/png', cutoutData.width, cutoutData.height);
+    const cutoutImage = await writeProToolBuffer(payload.projectId, imageData.projectDir, 'pro-tools/cutouts', cutoutBuffer, `${imageData.fileName}-cutout`, 'image/png', cutoutData.width, cutoutData.height);
+    return {
+      image: cutoutImage,
+      mask: maskImage,
+      modelUsed: segmentation ? segmentation.modelId : 'local-edge-fallback',
+      message: segmentation ? 'Background removed with the local Pro AI model.' : 'Background removed with the local fallback matte. Install the Pro AI model pack for stronger cutouts.',
+    };
+  });
+}
+
+async function finishLocalImage(payload: ProToolImagePayload) {
+  return enqueueProTool(async () => {
+    const imageData = await resolveImagePayload(payload.projectId, payload.image);
+    const settings = payload.settings || {};
+    const clampSigned = (value: unknown) => Math.max(-100, Math.min(100, Number(value ?? 0)));
+    const sharpen = clampSigned(settings.sharpen);
+    const denoise = clampSigned(settings.denoise);
+    const clarity = clampSigned(settings.clarity);
+    const brightness = clampSigned(settings.brightness);
+    const saturation = clampSigned(settings.saturation);
+    const upscale = Math.max(1, Math.min(2, Number(settings.upscale ?? 1)));
+    const brightnessFactor = Math.max(0.35, 1 + brightness / 220);
+    const saturationFactor = Math.max(0, 1 + saturation / 150);
+    const contrastFactor = Math.max(0.35, 1 + clarity / 240);
+    const contrastOffset = clarity > 0 ? -(clarity / 5) : Math.abs(clarity) / 8;
+
+    let pipeline = sharp(imageData.buffer)
+      .rotate()
+      .resize({ width: Math.round(4096 * upscale), height: Math.round(4096 * upscale), fit: 'inside', withoutEnlargement: upscale <= 1, kernel: sharp.kernel.lanczos3 })
+      .modulate({
+        brightness: brightnessFactor,
+        saturation: saturationFactor,
+      })
+      .linear(contrastFactor, contrastOffset);
+
+    if (denoise < 0) {
+      pipeline = pipeline.median(Math.max(1, Math.min(3, Math.round(Math.abs(denoise) / 34))));
+    }
+    if (denoise > 0) {
+      pipeline = pipeline.sharpen({
+        sigma: 0.65 + denoise / 115,
+        m1: 0.55,
+        m2: 1.25,
+      });
+    }
+    if (sharpen > 0) {
+      pipeline = pipeline.sharpen({
+        sigma: 0.8 + sharpen / 75,
+        m1: 0.8,
+        m2: 1.8,
+      });
+    }
+    if (sharpen < 0) {
+      pipeline = pipeline.blur(Math.min(1.4, Math.abs(sharpen) / 80));
+    }
+
+    const output = await pipeline.png().toBuffer();
+    const metadata = await sharp(output).metadata();
+    const image = await writeProToolBuffer(payload.projectId, imageData.projectDir, 'pro-tools/finished', output, `${imageData.fileName}-finished`, 'image/png', metadata.width || imageData.width, metadata.height || imageData.height);
+    return {
+      image,
+      settings: { sharpen, denoise, clarity, brightness, saturation, upscale },
+      message: 'Finished locally and saved to the project.',
+    };
+  });
+}
+
+async function installProAiPack() {
+  await fs.rm(PRO_AI_SETUP_TEMP, { recursive: true, force: true });
+  await fs.mkdir(PRO_AI_SETUP_TEMP, { recursive: true });
+  const headers = { 'User-Agent': 'ISTUDIO-Pro-AI-Installer' };
+  const response = await fetch('https://api.github.com/repos/metadreamx/ISTUDIO/releases/latest', { headers });
+  if (!response.ok) {
+    throw new Error('Could not reach ISTUDIO releases to install the Pro AI Pack.');
+  }
+  const release = await response.json() as { assets?: Array<{ name: string; browser_download_url: string }> };
+  const asset = (release.assets || []).find((item) => item.name === 'ISTUDIO-ProTools-windows.zip');
+  if (!asset) {
+    throw new Error('The Pro AI Pack is not published yet. Install it after the next ISTUDIO release includes ISTUDIO-ProTools-windows.zip.');
+  }
+
+  const zipPath = path.join(PRO_AI_SETUP_TEMP, 'ISTUDIO-ProTools-windows.zip');
+  const zipResponse = await fetch(asset.browser_download_url, { headers });
+  if (!zipResponse.ok || !zipResponse.body) {
+    throw new Error('Could not download the Pro AI Pack.');
+  }
+  const zipBuffer = Buffer.from(await zipResponse.arrayBuffer());
+  await fs.writeFile(zipPath, zipBuffer);
+
+  const extractPath = path.join(PRO_AI_SETUP_TEMP, 'extract');
+  await fs.mkdir(extractPath, { recursive: true });
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      `Expand-Archive -LiteralPath ${JSON.stringify(zipPath)} -DestinationPath ${JSON.stringify(extractPath)} -Force`,
+    ], { windowsHide: true });
+    child.on('error', reject);
+    child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`Pro AI Pack extraction failed with code ${code}.`)));
+  });
+
+  const candidates = [
+    extractPath,
+    path.join(extractPath, 'ISTUDIO-ProTools'),
+    path.join(extractPath, 'ISTUDIO'),
+  ];
+  const root = candidates.find((candidate) => existsSync(path.join(candidate, 'models', 'pro-ai')) || existsSync(path.join(candidate, 'runtime', 'pro-ai')));
+  if (!root) {
+    throw new Error('The downloaded Pro AI Pack is incomplete.');
+  }
+  if (existsSync(path.join(root, 'models', 'pro-ai'))) {
+    await fs.mkdir(PRO_AI_MODELS_DIR, { recursive: true });
+    await fs.cp(path.join(root, 'models', 'pro-ai'), PRO_AI_MODELS_DIR, { recursive: true, force: true });
+  }
+  if (existsSync(path.join(root, 'runtime', 'pro-ai'))) {
+    await fs.mkdir(PRO_AI_RUNTIME_DIR, { recursive: true });
+    await fs.cp(path.join(root, 'runtime', 'pro-ai'), PRO_AI_RUNTIME_DIR, { recursive: true, force: true });
+  }
+  await fs.rm(PRO_AI_SETUP_TEMP, { recursive: true, force: true });
+  return getProToolStatus();
 }
 
 function tetherStatus(options: { includeImages?: boolean; knownCaptureIds?: Set<string> } = {}) {
@@ -1371,6 +2118,42 @@ async function startServer() {
     }
   });
 
+  app.post('/api/color-grade/analyze', async (req, res) => {
+    try {
+      const payload = req.body as ColorGradeRenderPayload;
+      if (!payload?.projectId || !payload.target) {
+        res.status(400).json({ error: 'Choose a target photo before running Master Match.' });
+        return;
+      }
+      const [target, reference] = await Promise.all([
+        analyzeColorGradeImage(payload.projectId, payload.target),
+        payload.reference ? analyzeColorGradeImage(payload.projectId, payload.reference) : Promise.resolve(null),
+      ]);
+      res.json({
+        engineVersion: payload.recipe?.version || '2.0.0',
+        target,
+        reference,
+      });
+    } catch (error) {
+      console.error('Color Grade analysis failed', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Master Match analysis failed.' });
+    }
+  });
+
+  app.post('/api/color-grade/render', async (req, res) => {
+    try {
+      const payload = req.body as ColorGradeRenderPayload;
+      if (!payload?.projectId || !payload.target || !payload.recipe) {
+        res.status(400).json({ error: 'The Master Match render request is incomplete.' });
+        return;
+      }
+      res.json(await renderColorGradeImage(payload));
+    } catch (error) {
+      console.error('Color Grade render failed', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Full-resolution Master Match render failed.' });
+    }
+  });
+
   app.get('/api/projects', async (req, res) => {
     try {
       const wantsFullProjects = req.query.full === '1' || req.query.includeImages === '1';
@@ -1566,6 +2349,52 @@ async function startServer() {
     } catch (error) {
       console.error('Failed to use Virtual Set render as reference', error);
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to use render as reference.' });
+    }
+  });
+
+  app.get('/api/pro-tools/status', async (_req, res) => {
+    try {
+      res.json(await getProToolStatus());
+    } catch (error) {
+      console.error('Failed to inspect Pro AI tools', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to inspect Pro AI tools.' });
+    }
+  });
+
+  app.post('/api/pro-tools/install', async (_req, res) => {
+    try {
+      res.json(await installProAiPack());
+    } catch (error) {
+      await fs.rm(PRO_AI_SETUP_TEMP, { recursive: true, force: true }).catch(() => undefined);
+      console.error('Failed to install Pro AI Pack', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to install Pro AI Pack.' });
+    }
+  });
+
+  app.post('/api/pro-tools/cull', async (req, res) => {
+    try {
+      res.json(await analyzeLocalImage(req.body as ProToolImagePayload));
+    } catch (error) {
+      console.error('Failed to analyze image with Pro Tools', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to analyze image.' });
+    }
+  });
+
+  app.post('/api/pro-tools/background-cutout', async (req, res) => {
+    try {
+      res.json(await removeLocalBackground(req.body as ProToolImagePayload));
+    } catch (error) {
+      console.error('Failed to remove background with Pro Tools', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to remove background.' });
+    }
+  });
+
+  app.post('/api/pro-tools/finish', async (req, res) => {
+    try {
+      res.json(await finishLocalImage(req.body as ProToolImagePayload));
+    } catch (error) {
+      console.error('Failed to finish image with Pro Tools', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to finish image.' });
     }
   });
 
